@@ -118,7 +118,7 @@ class SupabaseMemoryStore:
             "user_id": user_id,
             "namespace": namespace,
             "key": key,
-            "content": content,
+            "value": content,  # La tabla usa "value" en vez de "content"
             "expires_at": expires_at,
             "updated_at": datetime.utcnow().isoformat()
         }
@@ -170,7 +170,7 @@ class SupabaseMemoryStore:
                     self.delete(user_id, key, namespace)
                     return None
 
-            return entry.get("content")
+            return entry.get("value")
 
         except Exception as e:
             print(f"[MemoryStore] Error getting memory: {e}")
@@ -220,7 +220,7 @@ class SupabaseMemoryStore:
 
                 entries.append(MemoryEntry(
                     key=row["key"],
-                    content=row["content"],
+                    content=row["value"],  # La tabla usa "value"
                     namespace=row["namespace"],
                     created_at=datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")) if row.get("created_at") else None,
                     expires_at=datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00")) if row.get("expires_at") else None
@@ -354,7 +354,7 @@ class SupabaseMemoryStore:
         result = {}
         for ns in namespaces:
             entries = self.list(user_id, namespace=ns, limit=20)
-            result[ns] = [{"key": e.key, **e.content} for e in entries]
+            result[ns] = [{"key": e.key, **(e.content if isinstance(e.content, dict) else {"value": e.content})} for e in entries]
 
         return result
 
@@ -376,15 +376,16 @@ def get_memory_store() -> Optional[SupabaseMemoryStore]:
 
 
 # SQL para crear la tabla (para referencia)
+# NOTA: La tabla ya existe con esta estructura:
 CREATE_TABLE_SQL = """
--- Tabla para memoria a largo plazo del agente
+-- Tabla para memoria a largo plazo del agente (estructura existente)
 CREATE TABLE IF NOT EXISTS agent_memory (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     namespace TEXT NOT NULL DEFAULT 'default',
     key TEXT NOT NULL,
-    content JSONB NOT NULL,
-    embedding VECTOR(1536),
+    value JSONB NOT NULL,  -- Almacena el contenido
+    metadata JSONB,        -- Metadata adicional opcional
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     expires_at TIMESTAMPTZ,
@@ -394,9 +395,4 @@ CREATE TABLE IF NOT EXISTS agent_memory (
 -- Índices
 CREATE INDEX IF NOT EXISTS idx_agent_memory_user ON agent_memory(user_id, namespace);
 CREATE INDEX IF NOT EXISTS idx_agent_memory_key ON agent_memory(key);
-
--- Para búsqueda vectorial (requiere pgvector)
--- CREATE INDEX IF NOT EXISTS idx_agent_memory_embedding ON agent_memory
--- USING ivfflat (embedding vector_cosine_ops)
--- WITH (lists = 100);
 """

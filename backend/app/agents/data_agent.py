@@ -160,16 +160,20 @@ class DataAgent:
         elif any(kw in q_lower for kw in ["venta", "factura", "ingreso", "revenue", "vendido", "vendieron", "facturado"]):
             query_ids = ["kpi_sales_summary", "ts_sales_by_day", "top_products_by_revenue"]
 
+        # Quiebre de stock / Reposición - necesita KPIs + productos low stock + top ventas
+        elif any(kw in q_lower for kw in ["quebrar", "quiebre", "agotar", "agotarse", "agotando", "faltante", "reponer", "reposicion", "reposición"]):
+            query_ids = ["kpi_sales_summary", "products_low_stock", "top_products_by_revenue"]
+
         # Inventario / Stock (sin "vendido")
         elif any(kw in q_lower for kw in ["inventario", "stock", "existencia"]):
-            if any(kw in q_lower for kw in ["bajo", "alerta", "reponer", "falta"]):
-                query_ids = ["products_low_stock", "stock_alerts"]
+            if any(kw in q_lower for kw in ["bajo", "alerta", "falta"]):
+                query_ids = ["kpi_sales_summary", "products_low_stock", "top_products_by_revenue"]
             else:
-                query_ids = ["products_inventory", "products_low_stock"]
+                query_ids = ["kpi_sales_summary", "products_inventory", "products_low_stock"]
 
         # Productos (generico, sin "vendido")
         elif "producto" in q_lower and not any(kw in q_lower for kw in ["vendido", "venta", "revenue"]):
-            query_ids = ["products_inventory", "products_low_stock"]
+            query_ids = ["kpi_sales_summary", "products_inventory", "products_low_stock"]
 
         # Preventa
         elif any(kw in q_lower for kw in ["preventa", "consulta", "pregunta"]):

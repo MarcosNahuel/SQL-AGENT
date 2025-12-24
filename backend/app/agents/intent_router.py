@@ -90,7 +90,8 @@ class IntentRouter:
         "pareto", "insight", "insights", "resumen", "ticket",
         # Preguntas analiticas complejas
         "reposicion", "reposición", "reponer", "necesitar", "recomendar",
-        "bajo stock", "alta rotacion", "rotacion",
+        "bajo stock", "alta rotacion", "rotacion", "rotación",
+        "quebrar", "quiebre", "agotar", "agotarse", "agotando", "faltante",
         "proyeccion", "proyectar", "estimar", "predecir",
         "margen", "ganancia", "beneficio",
         "cyber", "cybermonday", "black friday", "hot sale",

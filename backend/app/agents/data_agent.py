@@ -123,6 +123,71 @@ class DataAgent:
                 return self.llm_openrouter.invoke(messages)
             raise e
 
+    def _parse_json_robust(self, content: str) -> dict:
+        """
+        Parser JSON robusto para respuestas LLM.
+        Maneja: markdown, comillas simples, texto extra, etc.
+
+        Returns:
+            dict parseado o {} si falla completamente
+        """
+        import json
+        import re
+
+        if not content or not content.strip():
+            return {}
+
+        content = content.strip()
+
+        # 1. Intentar parsear directamente (caso ideal)
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+
+        # 2. Remover markdown code blocks
+        if "```" in content:
+            match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
+            if match:
+                content = match.group(1).strip()
+                try:
+                    return json.loads(content)
+                except json.JSONDecodeError:
+                    pass
+
+        # 3. Buscar objeto JSON con regex (maneja texto extra)
+        json_match = re.search(r'\{[\s\S]*\}', content)
+        if json_match:
+            json_str = json_match.group(0)
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                pass
+
+        # 4. Intentar fix de comillas (solo si no hay apóstrofes en texto)
+        # Esto es arriesgado pero útil para LLMs que usan Python dict syntax
+        if "'" in content and '"' not in content:
+            try:
+                # Solo reemplazar comillas simples alrededor de keys/values
+                fixed = re.sub(r"'(\w+)'", r'"\1"', content)
+                fixed = re.sub(r":\s*'([^']*)'", r': "\1"', fixed)
+                return json.loads(fixed)
+            except json.JSONDecodeError:
+                pass
+
+        # 5. Fallback: intentar extraer query_ids con regex
+        query_ids_match = re.search(r'query_ids["\']?\s*:\s*\[(.*?)\]', content, re.IGNORECASE)
+        if query_ids_match:
+            ids_str = query_ids_match.group(1)
+            # Extraer strings entre comillas
+            ids = re.findall(r'["\']([^"\']+)["\']', ids_str)
+            if ids:
+                return {"query_ids": ids, "params": {}}
+
+        # 6. Falló todo
+        print(f"[DataAgent] JSON parse failed for: {content[:200]}")
+        return {}
+
     def _decide_queries_heuristic(self, question: str) -> QueryPlan:
         """
         Fallback: usa heuristicas simples para decidir queries sin LLM.
@@ -261,16 +326,15 @@ Responde SOLO con el JSON de queries a ejecutar."""
             print(f"[DataAgent] LLM error, fallback to heuristics: {llm_error}")
             return self._decide_queries_heuristic(question)
 
-        # Parsear respuesta
-        import json
-        import re
+        # Parsear respuesta usando el helper robusto
         try:
-            # Obtener contenido
+            # Extraer contenido del response
             raw_content = response.content
             print(f"[DataAgent] Raw content type: {type(raw_content)}")
 
             # Si es lista, buscar el primer elemento con 'text'
             if isinstance(raw_content, list):
+                content = ""
                 for part in raw_content:
                     if isinstance(part, dict) and "text" in part:
                         content = part["text"]
@@ -287,19 +351,14 @@ Responde SOLO con el JSON de queries a ejecutar."""
             else:
                 content = str(raw_content)
 
-            content = content.strip()
-            print(f"[DataAgent] Extracted content: {content[:200]}")
+            print(f"[DataAgent] Extracted content: {content[:200] if content else 'None'}")
 
-            # Limpiar posibles markdown
-            if "```" in content:
-                match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
-                if match:
-                    content = match.group(1).strip()
+            # Usar parser robusto
+            plan_data = self._parse_json_robust(content)
 
-            # Reemplazar comillas simples por dobles
-            content = content.replace("'", '"')
-
-            plan_data = json.loads(content)
+            if not plan_data:
+                print("[DataAgent] JSON parse failed, using heuristics fallback")
+                return self._decide_queries_heuristic(question)
 
             # Validar que todas las queries existen
             valid_ids = [qid for qid in plan_data.get("query_ids", []) if validate_query_id(qid)]
@@ -315,13 +374,9 @@ Responde SOLO con el JSON de queries a ejecutar."""
                 params=plan_data.get("params", {})
             )
         except Exception as e:
-            print(f"Error parseando respuesta LLM: {e}")
-            print(f"Contenido recibido: {content[:300] if content else 'None'}")
-            # Fallback seguro
-            return QueryPlan(
-                query_ids=["kpi_sales_summary", "ts_sales_by_day"],
-                params={}
-            )
+            print(f"[DataAgent] Error parseando respuesta LLM: {e}")
+            # Fallback seguro a heuristics
+            return self._decide_queries_heuristic(question)
 
     def execute_plan(self, plan: QueryPlan, date_from: Optional[str] = None, date_to: Optional[str] = None) -> DataPayload:
         """

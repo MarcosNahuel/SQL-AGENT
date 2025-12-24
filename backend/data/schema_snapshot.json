@@ -1,0 +1,112 @@
+{
+  "version": "1.0.0",
+  "generated_at": "2025-12-24T15:00:00Z",
+  "tables": {
+    "orders": {
+      "description": "Ordenes de MercadoLibre - tabla principal de ventas",
+      "columns": {
+        "id": "bigint PK - ID del pack/orden",
+        "status": "varchar - Estado: paid, cancelled, etc",
+        "date_created": "timestamptz - Fecha de creacion",
+        "total_amount": "numeric - Monto total de la orden",
+        "paid_amount": "numeric - Monto pagado",
+        "currency_id": "varchar - Moneda (ARS, USD)",
+        "buyer_id": "bigint FK - ID del comprador",
+        "shipping_id": "bigint - ID de envio"
+      },
+      "key_queries": ["ventas", "ordenes", "facturacion", "ingresos"]
+    },
+    "order_items": {
+      "description": "Items de cada orden - detalle de productos vendidos",
+      "columns": {
+        "id": "bigint PK",
+        "order_id": "bigint FK -> orders.id",
+        "item_id": "varchar - SKU de MercadoLibre",
+        "title": "varchar - Nombre del producto",
+        "quantity": "int - Cantidad vendida",
+        "unit_price": "numeric - Precio unitario",
+        "full_unit_price": "numeric - Precio sin descuento"
+      },
+      "key_queries": ["productos vendidos", "items", "unidades"]
+    },
+    "products": {
+      "description": "Catalogo de productos con stock",
+      "columns": {
+        "id": "varchar PK - SKU MercadoLibre (MLA...)",
+        "title": "varchar - Nombre del producto",
+        "price": "numeric - Precio actual",
+        "available_quantity": "int - Stock disponible",
+        "sold_quantity": "int - Total vendidos historico",
+        "status": "varchar - active, paused, closed",
+        "category_id": "varchar - Categoria ML"
+      },
+      "key_queries": ["inventario", "stock", "productos", "catalogo"]
+    },
+    "buyers": {
+      "description": "Compradores/clientes",
+      "columns": {
+        "id": "bigint PK - ID de MercadoLibre",
+        "nickname": "varchar - Usuario ML",
+        "first_name": "varchar",
+        "last_name": "varchar",
+        "email": "varchar",
+        "city": "varchar",
+        "state": "varchar"
+      },
+      "key_queries": ["clientes", "compradores", "usuarios"]
+    },
+    "agent_interactions": {
+      "description": "Interacciones del agente AI con compradores",
+      "columns": {
+        "id": "uuid PK",
+        "buyer_id": "text - ID comprador",
+        "message_original": "text - Mensaje del cliente",
+        "ai_response": "text - Respuesta generada",
+        "case_type": "text - Tipo de caso",
+        "was_escalated": "boolean - Si fue escalado",
+        "source": "text - postventa/preventa",
+        "created_at": "timestamptz"
+      },
+      "key_queries": ["interacciones", "agente AI", "mensajes", "casos"]
+    },
+    "escalations": {
+      "description": "Casos escalados a humanos",
+      "columns": {
+        "id": "uuid PK",
+        "buyer_id": "text",
+        "message_original": "text",
+        "reason": "text - Razon del escalado",
+        "status": "text - pending, resolved",
+        "priority": "int - 1-10",
+        "human_response": "text",
+        "created_at": "timestamptz"
+      },
+      "key_queries": ["escalados", "escalaciones", "soporte"]
+    },
+    "conversations": {
+      "description": "Hilos de conversacion",
+      "columns": {
+        "id": "uuid PK",
+        "pack_id": "bigint FK -> orders.id",
+        "buyer_id": "bigint FK -> buyers.id",
+        "status": "enum - pending, active, resolved",
+        "case_type": "enum - consulta, queja, reclamo",
+        "ai_confidence": "numeric - Confianza del AI",
+        "requires_human": "boolean"
+      },
+      "key_queries": ["conversaciones", "chats", "hilos"]
+    }
+  },
+  "relationships": [
+    {"from": "orders.buyer_id", "to": "buyers.id", "type": "many-to-one"},
+    {"from": "order_items.order_id", "to": "orders.id", "type": "many-to-one"},
+    {"from": "conversations.pack_id", "to": "orders.id", "type": "one-to-one"},
+    {"from": "conversations.buyer_id", "to": "buyers.id", "type": "many-to-one"}
+  ],
+  "common_queries": {
+    "ventas_totales": "SELECT SUM(total_amount) FROM orders WHERE status = 'paid'",
+    "productos_vendidos": "SELECT oi.title, SUM(oi.quantity) FROM order_items oi JOIN orders o ON oi.order_id = o.id WHERE o.status = 'paid' GROUP BY oi.title",
+    "stock_bajo": "SELECT id, title, available_quantity FROM products WHERE available_quantity < 10 AND status = 'active'",
+    "tasa_escalado": "SELECT COUNT(*) FILTER (WHERE was_escalated) * 100.0 / COUNT(*) FROM agent_interactions"
+  }
+}

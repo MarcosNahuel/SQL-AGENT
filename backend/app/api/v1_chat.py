@@ -124,9 +124,14 @@ async def generate_ai_sdk_stream(
     data_payload_emitted = False
 
     # 4. Process through LangGraph pipeline (v1 or v2)
-    stream_func = run_insight_graph_v2_streaming if use_v2 else run_insight_graph_streaming
+    # Pass conversation_id as thread_id for checkpointer persistence (v2 only)
+    if use_v2:
+        thread_id = conversation_id or f"thread-{trace_id}"
+        stream_generator = run_insight_graph_v2_streaming(query_request, trace_id, thread_id)
+    else:
+        stream_generator = run_insight_graph_streaming(query_request, trace_id)
 
-    async for event_str in stream_func(query_request, trace_id):
+    async for event_str in stream_generator:
         try:
             event = json.loads(event_str)
             event_type = event.get("event", "")

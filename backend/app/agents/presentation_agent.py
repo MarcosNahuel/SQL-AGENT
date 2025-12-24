@@ -135,6 +135,56 @@ class PresentationAgent:
                     return response.content
                 raise e
 
+    def _parse_json_robust(self, content: str) -> dict:
+        """
+        Parser JSON robusto para respuestas LLM.
+        Maneja: markdown, comillas simples, texto extra, etc.
+        """
+        import json
+        import re
+
+        if not content or not content.strip():
+            return {}
+
+        content = content.strip()
+
+        # 1. Intentar parsear directamente
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+
+        # 2. Remover markdown code blocks
+        if "```" in content:
+            match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
+            if match:
+                content = match.group(1).strip()
+                try:
+                    return json.loads(content)
+                except json.JSONDecodeError:
+                    pass
+
+        # 3. Buscar objeto JSON con regex
+        json_match = re.search(r'\{[\s\S]*\}', content)
+        if json_match:
+            json_str = json_match.group(0)
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                pass
+
+        # 4. Fix comillas simples (solo si no hay double quotes)
+        if "'" in content and '"' not in content:
+            try:
+                fixed = re.sub(r"'(\w+)'", r'"\1"', content)
+                fixed = re.sub(r":\s*'([^']*)'", r': "\1"', fixed)
+                return json.loads(fixed)
+            except json.JSONDecodeError:
+                pass
+
+        print(f"[PresentationAgent] JSON parse failed for: {content[:200]}")
+        return {}
+
     def _build_spec_heuristic(self, question: str, payload: DataPayload) -> DashboardSpec:
         """
         Construye el DashboardSpec usando heuristicas deterministicas.
@@ -659,9 +709,9 @@ Genera insights basados en estos datos."""
                 HumanMessage(content=user_msg)
             ])
 
-            # Parsear respuesta (manejar diferentes formatos)
-            import re
+            # Extraer contenido del response
             if isinstance(raw_content, list):
+                content = ""
                 for part in raw_content:
                     if isinstance(part, dict) and "text" in part:
                         content = part["text"]
@@ -676,13 +726,11 @@ Genera insights basados en estos datos."""
             else:
                 content = str(raw_content)
 
-            content = content.strip()
-            if "```" in content:
-                match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
-                if match:
-                    content = match.group(1).strip()
+            # Usar parser robusto
+            narrative_data = self._parse_json_robust(content)
 
-            narrative_data = json.loads(content)
+            if not narrative_data:
+                raise ValueError("JSON parse failed")
 
             narratives = []
 

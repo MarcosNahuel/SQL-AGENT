@@ -186,16 +186,9 @@ class IntentRouter:
 
         # Paso 6: Determinar tipo de respuesta
         if not needs_data and not needs_dashboard:
-            # No hay keywords claros - pedir clarificacion
-            return RoutingDecision(
-                response_type=ResponseType.CLARIFICATION,
-                needs_sql=False,
-                needs_dashboard=False,
-                needs_narrative=False,
-                direct_response=self.DIRECT_RESPONSES["clarification"],
-                confidence=0.6,
-                reasoning="No clear data or dashboard keywords found"
-            )
+            # No hay keywords claros - usar LLM para clasificación semántica
+            print(f"[IntentRouter] No clear keywords, using LLM semantic routing...")
+            return self._route_with_llm(question)
 
         if needs_dashboard:
             return RoutingDecision(
@@ -234,11 +227,83 @@ class IntentRouter:
 
     def _route_with_llm(self, question: str) -> RoutingDecision:
         """
-        Usa LLM para casos ambiguos (no implementado en MVP).
-        Fallback a heuristicas.
+        Usa LLM para clasificación semántica cuando las heurísticas no son claras.
         """
-        # TODO: Implementar routing con LLM para casos complejos
-        return self.route(question)
+        import json
+
+        system_prompt = """Eres un clasificador de intenciones para un sistema de analytics de e-commerce.
+Analiza la pregunta del usuario y determina:
+1. response_type: "dashboard" (necesita visualización/análisis), "data_only" (solo números), "conversational" (saludo/ayuda)
+2. domain: "sales" (ventas/órdenes), "inventory" (productos/stock), "conversations" (agente AI/escalados)
+
+Responde SOLO con JSON válido:
+{"response_type": "dashboard|data_only|conversational", "domain": "sales|inventory|conversations", "reasoning": "explicación breve"}"""
+
+        try:
+            response = self.llm.invoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=f"Pregunta: {question}")
+            ])
+
+            content = str(response.content).strip()
+            # Intentar parsear JSON
+            if "```" in content:
+                import re
+                match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
+                if match:
+                    content = match.group(1).strip()
+
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                content = json_match.group(0)
+
+            data = json.loads(content)
+            resp_type = data.get("response_type", "dashboard")
+            domain = data.get("domain", "sales")
+
+            if resp_type == "conversational":
+                return RoutingDecision(
+                    response_type=ResponseType.CONVERSATIONAL,
+                    needs_sql=False,
+                    needs_dashboard=False,
+                    needs_narrative=False,
+                    direct_response=self.DIRECT_RESPONSES.get("help", ""),
+                    confidence=0.8,
+                    reasoning=f"LLM semantic: {data.get('reasoning', 'N/A')}"
+                )
+            elif resp_type == "data_only":
+                return RoutingDecision(
+                    response_type=ResponseType.DATA_ONLY,
+                    needs_sql=True,
+                    needs_dashboard=False,
+                    needs_narrative=True,
+                    domain=domain,
+                    confidence=0.8,
+                    reasoning=f"LLM semantic: {data.get('reasoning', 'N/A')}"
+                )
+            else:  # dashboard
+                return RoutingDecision(
+                    response_type=ResponseType.DASHBOARD,
+                    needs_sql=True,
+                    needs_dashboard=True,
+                    needs_narrative=True,
+                    domain=domain,
+                    confidence=0.8,
+                    reasoning=f"LLM semantic: {data.get('reasoning', 'N/A')}"
+                )
+
+        except Exception as e:
+            print(f"[IntentRouter] LLM fallback error: {e}")
+            # Fallback seguro a dashboard con dominio sales
+            return RoutingDecision(
+                response_type=ResponseType.DASHBOARD,
+                needs_sql=True,
+                needs_dashboard=True,
+                needs_narrative=True,
+                domain="sales",
+                confidence=0.5,
+                reasoning=f"LLM error fallback: {str(e)[:50]}"
+            )
 
 
 # Singleton

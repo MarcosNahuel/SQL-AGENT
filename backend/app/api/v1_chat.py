@@ -14,7 +14,11 @@ data: {"type":"data-agent_step","data":{...}}
 data: {"type":"data-dashboard","data":{...}}
 data: {"type":"finish","finishReason":"complete"}
 data: [DONE]
+
+Supports both v1 (linear) and v2 (supervisor) graph architectures.
+Set USE_GRAPH_V2=true to enable the new supervisor pattern.
 """
+import os
 import json
 import uuid
 from datetime import datetime
@@ -27,6 +31,14 @@ from pydantic import BaseModel, Field
 from ..schemas.intent import QueryRequest
 from ..graphs.insight_graph import run_insight_graph_streaming
 from ..utils.date_parser import extract_date_range, format_date_context
+
+# Import v2 graph if available
+try:
+    from ..graphs.insight_graph_v2 import run_insight_graph_v2_streaming
+    V2_AVAILABLE = True
+except ImportError:
+    V2_AVAILABLE = False
+    print("[v1_chat] Warning: Graph v2 not available")
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 
@@ -60,9 +72,16 @@ async def generate_ai_sdk_stream(
 
     This wraps the existing LangGraph pipeline and converts
     its events to AI SDK v5 protocol format.
+
+    Supports both v1 (linear) and v2 (supervisor) architectures
+    via USE_GRAPH_V2 environment variable.
     """
     message_id = f"msg-{trace_id}"
     text_id = f"text-{trace_id}"
+
+    # Check if v2 is enabled
+    use_v2 = os.getenv("USE_GRAPH_V2", "false").lower() == "true" and V2_AVAILABLE
+    print(f"[v1_chat] use_v2={use_v2}, V2_AVAILABLE={V2_AVAILABLE}, USE_GRAPH_V2={os.getenv('USE_GRAPH_V2')}")
 
     # 1. Start message
     yield emit_sse("start", {"messageId": message_id})
@@ -71,7 +90,8 @@ async def generate_ai_sdk_stream(
     yield emit_custom_data("trace", {
         "trace_id": trace_id,
         "request_id": conversation_id or trace_id,
-        "ts": datetime.now().isoformat()
+        "ts": datetime.now().isoformat(),
+        "graph_version": "v2" if use_v2 else "v1"
     })
 
     # 3. Start text block for narrative
@@ -103,8 +123,10 @@ async def generate_ai_sdk_stream(
     dashboard_emitted = False
     data_payload_emitted = False
 
-    # 4. Process through LangGraph pipeline
-    async for event_str in run_insight_graph_streaming(query_request, trace_id):
+    # 4. Process through LangGraph pipeline (v1 or v2)
+    stream_func = run_insight_graph_v2_streaming if use_v2 else run_insight_graph_streaming
+
+    async for event_str in stream_func(query_request, trace_id):
         try:
             event = json.loads(event_str)
             event_type = event.get("event", "")

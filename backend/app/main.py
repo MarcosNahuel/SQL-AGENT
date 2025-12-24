@@ -7,10 +7,16 @@ Endpoints:
 - GET /api/queries - Lista queries disponibles
 """
 import os
+import sys
 import uuid
 from typing import Optional
 from datetime import date
 from contextlib import asynccontextmanager
+
+# Windows async event loop fix for psycopg3
+if sys.platform == "win32":
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,6 +36,7 @@ from .sql.allowlist import get_available_queries
 from .db.supabase_client import get_db_client
 from .api.v1_chat import router as v1_chat_router
 from .observability.langsmith import is_langsmith_enabled
+from .memory.checkpointer import init_checkpointer, close_checkpointer, get_checkpointer_manager
 
 
 @asynccontextmanager
@@ -37,15 +44,26 @@ async def lifespan(app: FastAPI):
     """Lifecycle manager"""
     # Startup
     print("Starting SQL-Agent Backend...")
+
     # Test DB connection
     db = get_db_client()
     if db.test_connection():
         print("Database connection: OK")
     else:
         print("Database connection: FAILED (queries may not work)")
+
+    # Initialize checkpointer for LangGraph persistence
+    checkpointer_manager = await init_checkpointer()
+    app.state.checkpointer = checkpointer_manager.checkpointer
+    app.state.checkpointer_manager = checkpointer_manager
+
+    print(f"LangGraph checkpointer: {'PostgreSQL' if checkpointer_manager.is_postgres else 'Memory'}")
+
     yield
+
     # Shutdown
     print("Shutting down SQL-Agent Backend...")
+    await close_checkpointer()
 
 
 app = FastAPI(
@@ -101,6 +119,7 @@ class HealthResponse(BaseModel):
     version: str
     database: str
     langsmith: str
+    checkpointer: str
     cache: Optional[dict] = None
 
 
@@ -117,11 +136,16 @@ async def health_check():
     db_status = "connected" if db.test_connection() else "disconnected"
     langsmith_status = "enabled" if is_langsmith_enabled() else "disabled"
 
+    # Get checkpointer status
+    checkpointer_manager = get_checkpointer_manager()
+    checkpointer_status = "postgres" if checkpointer_manager.is_postgres else "memory"
+
     return HealthResponse(
         status="healthy",
         version="0.2.0",
         database=db_status,
         langsmith=langsmith_status,
+        checkpointer=checkpointer_status,
         cache=get_cache_stats()
     )
 

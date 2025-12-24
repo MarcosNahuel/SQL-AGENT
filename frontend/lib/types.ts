@@ -1,0 +1,144 @@
+// API Types - matching backend Pydantic schemas
+
+// SSE Streaming Event Types
+export interface StreamEvent {
+  event: "start" | "progress" | "complete" | "error";
+  message: string;
+  step?: string;
+  detail?: string;
+  trace_id?: string;
+  timestamp?: string;
+  result?: {
+    success: boolean;
+    dashboard_spec: DashboardSpec;
+    data_payload: DataPayload;
+    data_meta: DataMeta;
+  };
+}
+
+export interface InsightRequest {
+  question: string;
+  date_from?: string;
+  date_to?: string;
+  filters?: Record<string, unknown>;
+}
+
+export interface InsightResponse {
+  success: boolean;
+  trace_id: string;
+  dashboard_spec?: DashboardSpec;
+  data_payload?: DataPayload;
+  data_meta?: DataMeta;
+  error?: string;
+  execution_time_ms?: number;
+}
+
+export interface DashboardSpec {
+  title: string;
+  subtitle?: string;
+  conclusion?: string;  // Conclusion corta para mostrar en el chat
+  slots: SlotConfig;
+  generated_at?: string;
+}
+
+export interface SlotConfig {
+  filters: FilterConfig[];
+  series: KpiCardConfig[];
+  charts: (ChartConfig | TableConfig)[];
+  narrative: NarrativeConfig[];
+}
+
+export interface FilterConfig {
+  type: string;
+  from?: string;
+  to?: string;
+}
+
+export interface KpiCardConfig {
+  type: "kpi_card";
+  label: string;
+  value_ref: string;
+  format: "currency" | "number" | "percent";
+  delta_ref?: string;
+  icon?: string;
+}
+
+export interface ChartConfig {
+  type: "line_chart" | "bar_chart" | "area_chart";
+  title: string;
+  dataset_ref: string;
+  x_axis: string;
+  y_axis: string;
+  color?: string;
+}
+
+export interface TableConfig {
+  type: "table";
+  title: string;
+  dataset_ref: string;
+  columns: string[];
+  max_rows: number;
+}
+
+export interface NarrativeConfig {
+  type: "headline" | "insight" | "callout" | "summary";
+  text: string;
+  icon?: string;
+}
+
+export interface DataPayload {
+  kpis?: KpiData;
+  time_series?: TimeSeriesData[];
+  top_items?: TopItemsData[];
+  tables?: TableData[];
+}
+
+export interface KpiData {
+  total_sales?: number;
+  total_orders?: number;
+  avg_order_value?: number;
+  total_units?: number;
+  total_interactions?: number;
+  escalated_count?: number;
+  escalation_rate?: number;
+  auto_response_rate?: number;
+  [key: string]: number | undefined;
+}
+
+export interface TimeSeriesData {
+  series_name: string;
+  points: TimeSeriesPoint[];
+}
+
+export interface TimeSeriesPoint {
+  date: string;
+  value: number;
+  label?: string;
+}
+
+export interface TopItemsData {
+  ranking_name: string;
+  items: TopItem[];
+  metric: string;
+}
+
+export interface TopItem {
+  rank: number;
+  id: string;
+  title: string;
+  value: number;
+  extra?: Record<string, unknown>;
+}
+
+export interface TableData {
+  name: string;
+  rows: Record<string, unknown>[];
+}
+
+export interface DataMeta {
+  available_refs: string[];
+  datasets_count: number;
+  has_kpis: boolean;
+  has_time_series: boolean;
+  has_top_items: boolean;
+}

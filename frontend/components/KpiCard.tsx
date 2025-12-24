@@ -1,12 +1,14 @@
 "use client";
 
+import { motion } from "framer-motion";
 import { cn, formatValue, resolveRef } from "@/lib/utils";
 import { KpiCardConfig, DataPayload } from "@/lib/types";
-import { TrendingUp, TrendingDown, DollarSign, ShoppingCart, Package, Users } from "lucide-react";
+import { TrendingUp, TrendingDown, DollarSign, ShoppingCart, Package, Users, Activity } from "lucide-react";
 
 interface KpiCardProps {
   config: KpiCardConfig;
   payload?: DataPayload;
+  index?: number;
 }
 
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -14,9 +16,10 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   orders: ShoppingCart,
   products: Package,
   users: Users,
+  activity: Activity,
 };
 
-export function KpiCard({ config, payload }: KpiCardProps) {
+export function KpiCard({ config, payload, index = 0 }: KpiCardProps) {
   const value = resolveRef(config.value_ref, payload as Record<string, unknown>);
   const deltaValue = config.delta_ref
     ? resolveRef(config.delta_ref, payload as Record<string, unknown>)
@@ -26,33 +29,99 @@ export function KpiCard({ config, payload }: KpiCardProps) {
 
   const Icon = config.icon ? iconMap[config.icon] : DollarSign;
   const isPositive = deltaValue !== undefined && deltaValue > 0;
+  const isNegative = deltaValue !== undefined && deltaValue < 0;
 
   return (
-    <div className="bg-gray-800/50 backdrop-blur border border-gray-700/50 rounded-xl p-5 hover:bg-gray-800/70 transition-colors">
-      <div className="flex items-start justify-between">
-        <div className="flex-1">
-          <p className="text-sm text-gray-400 font-medium mb-1">{config.label}</p>
-          <p className="text-2xl font-bold text-white">{formattedValue}</p>
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{
+        duration: 0.3,
+        delay: index * 0.05,
+        ease: [0.25, 0.46, 0.45, 0.94]
+      }}
+      whileHover={{
+        y: -2,
+        transition: { duration: 0.15 }
+      }}
+      className={cn(
+        "kpi-card border-glow p-3 relative overflow-hidden group",
+        "cursor-default select-none"
+      )}
+    >
+      {/* Subtle gradient overlay on hover */}
+      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+        <div className={cn(
+          "absolute inset-0",
+          isPositive && "bg-gradient-to-br from-accent-emerald/5 to-transparent",
+          isNegative && "bg-gradient-to-br from-accent-neon-red/5 to-transparent",
+          !isPositive && !isNegative && "bg-gradient-to-br from-accent-blue/5 to-transparent"
+        )} />
+      </div>
+
+      <div className="flex items-center justify-between relative z-10 gap-2">
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-text-muted font-medium mb-0.5 truncate">
+            {config.label}
+          </p>
+
+          <motion.p
+            className="text-lg font-bold text-text-primary tracking-tight"
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: index * 0.05 + 0.1, duration: 0.2 }}
+          >
+            {formattedValue}
+          </motion.p>
 
           {deltaValue !== undefined && (
-            <div className={cn(
-              "flex items-center gap-1 mt-2 text-sm font-medium",
-              isPositive ? "text-green-400" : "text-red-400"
-            )}>
-              {isPositive ? (
-                <TrendingUp className="w-4 h-4" />
-              ) : (
-                <TrendingDown className="w-4 h-4" />
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: index * 0.05 + 0.15, duration: 0.2 }}
+              className={cn(
+                "flex items-center gap-1 mt-1 text-xs font-medium",
+                isPositive && "text-accent-emerald",
+                isNegative && "text-accent-neon-red",
+                !isPositive && !isNegative && "text-text-muted"
               )}
+            >
+              {isPositive ? (
+                <TrendingUp className="w-3 h-3" />
+              ) : isNegative ? (
+                <TrendingDown className="w-3 h-3" />
+              ) : null}
               <span>{formatValue(Math.abs(deltaValue), "percent")}</span>
-            </div>
+            </motion.div>
           )}
         </div>
 
-        <div className="p-2 bg-blue-500/10 rounded-lg">
-          <Icon className="w-5 h-5 text-blue-400" />
-        </div>
+        {/* Icon with glow effect */}
+        <motion.div
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: index * 0.05 + 0.1, duration: 0.2 }}
+          className={cn(
+            "p-2 rounded-lg relative flex-shrink-0",
+            "bg-accent-blue/10 group-hover:bg-accent-blue/15 transition-colors duration-300"
+          )}
+        >
+          <Icon className="w-4 h-4 text-accent-blue" />
+        </motion.div>
       </div>
-    </div>
+
+      {/* Bottom accent line */}
+      <motion.div
+        initial={{ scaleX: 0 }}
+        animate={{ scaleX: 1 }}
+        transition={{ delay: index * 0.1 + 0.4, duration: 0.5 }}
+        className={cn(
+          "absolute bottom-0 left-0 right-0 h-0.5 origin-left",
+          isPositive && "bg-gradient-to-r from-accent-emerald/50 to-transparent",
+          isNegative && "bg-gradient-to-r from-accent-neon-red/50 to-transparent",
+          !isPositive && !isNegative && "bg-gradient-to-r from-accent-blue/30 to-transparent"
+        )}
+      />
+    </motion.div>
   );
 }

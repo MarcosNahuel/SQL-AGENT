@@ -87,12 +87,39 @@ class TopItemsData(BaseModel):
     metric: str = Field("revenue", description="Metrica usada para el ranking")
 
 
+class ComparisonPeriod(BaseModel):
+    """Datos de un periodo en una comparación"""
+    label: str = Field(..., description="Etiqueta del periodo (ej: 'Diciembre 2025')")
+    date_from: str = Field(..., description="Fecha inicio ISO")
+    date_to: str = Field(..., description="Fecha fin ISO")
+    kpis: Optional[KPIData] = Field(None, description="KPIs del periodo")
+
+
+class ComparisonData(BaseModel):
+    """Datos de comparación entre dos periodos"""
+    is_comparison: bool = Field(True, description="Indica que es una comparación")
+    current_period: ComparisonPeriod = Field(..., description="Periodo actual/principal")
+    previous_period: ComparisonPeriod = Field(..., description="Periodo anterior/comparado")
+    # Deltas calculados
+    delta_sales: Optional[float] = Field(None, description="Cambio en ventas (actual - anterior)")
+    delta_sales_pct: Optional[float] = Field(None, description="Cambio % en ventas")
+    delta_orders: Optional[int] = Field(None, description="Cambio en ordenes")
+    delta_orders_pct: Optional[float] = Field(None, description="Cambio % en ordenes")
+    delta_avg_order: Optional[float] = Field(None, description="Cambio en ticket promedio")
+    delta_avg_order_pct: Optional[float] = Field(None, description="Cambio % en ticket promedio")
+    delta_units: Optional[int] = Field(None, description="Cambio en unidades")
+    delta_units_pct: Optional[float] = Field(None, description="Cambio % en unidades")
+
+
 class DataPayload(BaseModel):
     """Payload completo con todos los datasets"""
     kpis: Optional[KPIData] = Field(None, description="KPIs calculados")
     time_series: Optional[List[TimeSeriesData]] = Field(None, description="Series temporales")
     top_items: Optional[List[TopItemsData]] = Field(None, description="Rankings/tops")
     raw_data: Optional[List[Dict[str, Any]]] = Field(None, description="Datos crudos para tablas")
+
+    # Datos de comparación
+    comparison: Optional[ComparisonData] = Field(None, description="Datos de comparación entre periodos")
 
     # Metadata
     datasets_meta: List[DatasetMeta] = Field(default_factory=list)

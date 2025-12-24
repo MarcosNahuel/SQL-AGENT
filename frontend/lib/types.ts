@@ -44,7 +44,7 @@ export interface DashboardSpec {
 export interface SlotConfig {
   filters: FilterConfig[];
   series: KpiCardConfig[];
-  charts: (ChartConfig | TableConfig)[];
+  charts: (ChartConfig | TableConfig | ComparisonChartConfig)[];
   narrative: NarrativeConfig[];
 }
 
@@ -72,6 +72,15 @@ export interface ChartConfig {
   color?: string;
 }
 
+export interface ComparisonChartConfig {
+  type: "comparison_bar" | "comparison_kpi";
+  title: string;
+  current_label: string;
+  previous_label: string;
+  metrics: string[];
+  dataset_ref: string;
+}
+
 export interface TableConfig {
   type: "table";
   title: string;
@@ -91,6 +100,28 @@ export interface DataPayload {
   time_series?: TimeSeriesData[];
   top_items?: TopItemsData[];
   tables?: TableData[];
+  comparison?: ComparisonData;
+}
+
+export interface ComparisonPeriod {
+  label: string;
+  date_from: string;
+  date_to: string;
+  kpis?: KpiData;
+}
+
+export interface ComparisonData {
+  is_comparison: boolean;
+  current_period: ComparisonPeriod;
+  previous_period: ComparisonPeriod;
+  delta_sales?: number;
+  delta_sales_pct?: number;
+  delta_orders?: number;
+  delta_orders_pct?: number;
+  delta_avg_order?: number;
+  delta_avg_order_pct?: number;
+  delta_units?: number;
+  delta_units_pct?: number;
 }
 
 export interface KpiData {

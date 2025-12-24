@@ -25,7 +25,8 @@ from ..schemas.dashboard import (
     KpiCardConfig,
     ChartConfig,
     TableConfig,
-    NarrativeConfig
+    NarrativeConfig,
+    ComparisonChartConfig
 )
 from ..prompts.ultrathink import get_narrative_prompt
 
@@ -141,6 +142,87 @@ class PresentationAgent:
         """
         slots = SlotConfig()
 
+        # === MODO COMPARACION ===
+        if payload.comparison and payload.comparison.is_comparison:
+            comp = payload.comparison
+            # Añadir grafico de comparacion de barras para las metricas principales
+            metrics_available = []
+            if comp.delta_sales is not None:
+                metrics_available.append("total_sales")
+            if comp.delta_orders is not None:
+                metrics_available.append("total_orders")
+            if comp.delta_avg_order is not None:
+                metrics_available.append("avg_order_value")
+            if comp.delta_units is not None:
+                metrics_available.append("total_units")
+
+            if metrics_available:
+                slots.charts.append(ComparisonChartConfig(
+                    type="comparison_bar",
+                    title=f"Comparativa: {comp.current_period.label} vs {comp.previous_period.label}",
+                    current_label=comp.current_period.label,
+                    previous_label=comp.previous_period.label,
+                    metrics=metrics_available,
+                    dataset_ref="comparison"
+                ))
+
+            # Generar KPI cards con deltas de comparacion
+            kpi_configs = [
+                ("Ventas", "kpi.total_sales", "currency", comp.delta_sales_pct),
+                ("Ordenes", "kpi.total_orders", "number", comp.delta_orders_pct),
+                ("Ticket Promedio", "kpi.avg_order_value", "currency", comp.delta_avg_order_pct),
+                ("Unidades", "kpi.total_units", "number", comp.delta_units_pct),
+            ]
+
+            for label, ref, fmt, delta in kpi_configs:
+                if ref in payload.available_refs:
+                    trend = None
+                    if delta is not None:
+                        trend = "up" if delta > 0 else "down" if delta < 0 else "neutral"
+                    slots.series.append(KpiCardConfig(
+                        label=label,
+                        value_ref=ref,
+                        format=fmt,
+                        delta_ref=f"comparison.delta_{ref.split('.')[-1]}_pct" if delta is not None else None
+                    ))
+
+            # Generar titulo de comparacion
+            title = f"Comparativa: {comp.current_period.label} vs {comp.previous_period.label}"
+
+            # También añadir graficos normales si hay time_series
+            if payload.time_series:
+                for ts in payload.time_series:
+                    ref = f"ts.{ts.series_name}"
+                    if ref in payload.available_refs:
+                        slots.charts.append(ChartConfig(
+                            type="line_chart",
+                            title=f"Tendencia: {self._format_title(ts.series_name)}",
+                            dataset_ref=ref,
+                            x_axis="date",
+                            y_axis="value"
+                        ))
+
+            # Añadir top products si hay
+            if payload.top_items:
+                for top in payload.top_items:
+                    ref = f"top.{top.ranking_name}"
+                    if ref in payload.available_refs:
+                        slots.charts.append(ChartConfig(
+                            type="bar_chart",
+                            title=self._format_title(top.ranking_name),
+                            dataset_ref=ref,
+                            x_axis="title",
+                            y_axis="value"
+                        ))
+
+            return DashboardSpec(
+                title=title,
+                subtitle=f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+                slots=slots,
+                generated_at=datetime.utcnow().isoformat()
+            )
+
+        # === MODO NORMAL (sin comparacion) ===
         # 1. KPIs (si hay datos de KPI)
         if payload.kpis:
             # Mapeo de todos los KPIs posibles
@@ -238,61 +320,277 @@ class PresentationAgent:
         else:
             return "Dashboard de Insights"
 
-    def _generate_demo_narrative(self, payload: DataPayload) -> List[NarrativeConfig]:
-        """Genera narrativas estaticas para modo demo"""
+    def _generate_smart_narrative(self, payload: DataPayload) -> List[NarrativeConfig]:
+        """
+        Genera narrativas profesionales basadas en analisis de datos.
+        Funciona sin LLM - analiza patrones, tendencias y anomalias.
+        """
         narratives = []
+        insights = []
 
-        # Headline basado en los datos disponibles
-        if payload.kpis:
-            kpis = payload.kpis
-            # Ventas
-            if kpis.total_orders is not None:
-                avg_val = kpis.avg_order_value or 0
-                narratives.append(NarrativeConfig(
-                    type="headline",
-                    text="Las ventas muestran un comportamiento estable con oportunidades de crecimiento."
-                ))
-                narratives.append(NarrativeConfig(
-                    type="insight",
-                    text=f"Se registraron {kpis.total_orders} ordenes con un ticket promedio de ${avg_val:,.0f}."
-                ))
-            # AI Interactions
-            elif kpis.total_interactions is not None:
-                esc_rate = kpis.escalation_rate or 0
-                narratives.append(NarrativeConfig(
-                    type="headline",
-                    text=f"El agente AI procesó {kpis.total_interactions} interacciones."
-                ))
-                narratives.append(NarrativeConfig(
-                    type="insight",
-                    text=f"Tasa de escalamiento: {esc_rate:.1f}%. Auto-respuestas: {kpis.auto_responded or 0}."
-                ))
-            # Preventa
-            elif kpis.total_queries is not None:
-                ans_rate = kpis.answer_rate or 0
-                narratives.append(NarrativeConfig(
-                    type="headline",
-                    text=f"Se recibieron {kpis.total_queries} consultas de preventa."
-                ))
-                narratives.append(NarrativeConfig(
-                    type="insight",
-                    text=f"Tasa de respuesta: {ans_rate:.1f}%. Pendientes: {kpis.pending or 0}."
-                ))
+        # === ANALISIS DE COMPARACION (si existe) ===
+        if payload.comparison and payload.comparison.is_comparison:
+            comp = payload.comparison
+            curr = comp.current_period
+            prev = comp.previous_period
 
-        if payload.top_items and payload.top_items[0].items:
-            top_product = payload.top_items[0].items[0]
+            # Headline de comparación
             narratives.append(NarrativeConfig(
-                type="insight",
-                text=f"Top item: '{top_product.title}' con valor ${top_product.value:,.0f}."
+                type="headline",
+                text=f"Comparativa: {curr.label} vs {prev.label}"
             ))
 
+            # Analisis de ventas
+            if comp.delta_sales is not None and comp.delta_sales_pct is not None:
+                direction = "crecieron" if comp.delta_sales > 0 else "disminuyeron"
+                emoji = "📈" if comp.delta_sales > 0 else "📉"
+                abs_delta = abs(comp.delta_sales)
+                abs_pct = abs(comp.delta_sales_pct)
+
+                curr_sales = curr.kpis.total_sales if curr.kpis else 0
+                prev_sales = prev.kpis.total_sales if prev.kpis else 0
+
+                insights.append(
+                    f"{emoji} Las ventas {direction} un {abs_pct:.1f}% "
+                    f"(${curr_sales:,.0f} vs ${prev_sales:,.0f}), "
+                    f"una diferencia de ${abs_delta:,.0f}."
+                )
+
+                # Evaluación del cambio
+                if abs_pct > 30:
+                    if comp.delta_sales > 0:
+                        insights.append("🚀 Crecimiento excepcional. Analizar factores de éxito para replicar.")
+                    else:
+                        insights.append("⚠️ Caída significativa. Requiere acción inmediata.")
+                elif abs_pct > 10:
+                    if comp.delta_sales > 0:
+                        insights.append("✅ Buen crecimiento sostenido respecto al periodo anterior.")
+                    else:
+                        insights.append("📊 Caída moderada. Revisar estrategia comercial.")
+
+            # Analisis de ordenes
+            if comp.delta_orders is not None and comp.delta_orders_pct is not None:
+                curr_orders = curr.kpis.total_orders if curr.kpis else 0
+                prev_orders = prev.kpis.total_orders if prev.kpis else 0
+                direction = "aumentaron" if comp.delta_orders > 0 else "disminuyeron"
+                abs_pct = abs(comp.delta_orders_pct)
+
+                insights.append(
+                    f"Las órdenes {direction} un {abs_pct:.1f}% "
+                    f"({curr_orders:,} vs {prev_orders:,})."
+                )
+
+            # Analisis de ticket promedio
+            if comp.delta_avg_order is not None and comp.delta_avg_order_pct is not None:
+                curr_avg = curr.kpis.avg_order_value if curr.kpis else 0
+                prev_avg = prev.kpis.avg_order_value if prev.kpis else 0
+                direction = "subió" if comp.delta_avg_order > 0 else "bajó"
+                abs_pct = abs(comp.delta_avg_order_pct)
+
+                if abs_pct > 5:
+                    insights.append(
+                        f"El ticket promedio {direction} un {abs_pct:.1f}% "
+                        f"(${curr_avg:,.0f} vs ${prev_avg:,.0f})."
+                    )
+
+            # Analisis de unidades
+            if comp.delta_units is not None and comp.delta_units_pct is not None:
+                curr_units = curr.kpis.total_units if curr.kpis else 0
+                prev_units = prev.kpis.total_units if prev.kpis else 0
+                direction = "aumentaron" if comp.delta_units > 0 else "disminuyeron"
+                abs_pct = abs(comp.delta_units_pct)
+
+                insights.append(
+                    f"Las unidades vendidas {direction} un {abs_pct:.1f}% "
+                    f"({curr_units:,} vs {prev_units:,})."
+                )
+
+            # Agregar insights de comparación
+            for insight in insights[:5]:  # Máximo 5 insights
+                narratives.append(NarrativeConfig(
+                    type="insight",
+                    text=insight
+                ))
+
+            # Recomendación basada en comparación
+            if comp.delta_sales_pct is not None:
+                if comp.delta_sales_pct < -10:
+                    narratives.append(NarrativeConfig(
+                        type="callout",
+                        text="📊 Recomendación: Revisar causas de la caída. Considerar promociones, revisión de precios o refuerzo de marketing."
+                    ))
+                elif comp.delta_sales_pct > 20:
+                    narratives.append(NarrativeConfig(
+                        type="callout",
+                        text="🎯 Recomendación: Capitalizar el momentum positivo. Expandir inventario de productos estrella."
+                    ))
+                else:
+                    narratives.append(NarrativeConfig(
+                        type="callout",
+                        text="💡 Recomendación: Rendimiento estable. Enfocarse en optimización y eficiencia."
+                    ))
+
+            return narratives
+
+        # === ANALISIS DE KPIs (sin comparación) ===
+        if payload.kpis:
+            kpis = payload.kpis
+
+            # Ventas - Analisis completo
+            if kpis.total_sales is not None and kpis.total_orders is not None:
+                total_sales = kpis.total_sales
+                total_orders = kpis.total_orders
+                avg_ticket = kpis.avg_order_value or (total_sales / total_orders if total_orders > 0 else 0)
+                units = kpis.total_units or 0
+
+                # Calcular metricas derivadas
+                units_per_order = units / total_orders if total_orders > 0 else 0
+                revenue_per_unit = total_sales / units if units > 0 else 0
+
+                # Headline principal
+                narratives.append(NarrativeConfig(
+                    type="headline",
+                    text=f"Facturacion de ${total_sales:,.0f} en {total_orders:,} ordenes procesadas."
+                ))
+
+                # Insight de ticket promedio
+                if avg_ticket > 100000:
+                    insights.append(f"Ticket promedio alto (${avg_ticket:,.0f}) indica productos de alto valor o compras en bulk.")
+                elif avg_ticket > 50000:
+                    insights.append(f"Ticket promedio saludable de ${avg_ticket:,.0f} con buena conversion.")
+                else:
+                    insights.append(f"Ticket promedio de ${avg_ticket:,.0f}. Considerar estrategias de upselling.")
+
+                # Insight de unidades
+                if units > 0:
+                    if units_per_order > 2:
+                        insights.append(f"Promedio de {units_per_order:.1f} unidades/orden sugiere compras multiples o bundles efectivos.")
+                    else:
+                        insights.append(f"{units:,} unidades vendidas. Oportunidad de incrementar items por carrito.")
+
+            # AI Interactions
+            elif kpis.total_interactions is not None:
+                interactions = kpis.total_interactions
+                esc_rate = kpis.escalation_rate or 0
+                auto_resp = kpis.auto_responded or 0
+
+                narratives.append(NarrativeConfig(
+                    type="headline",
+                    text=f"Agente AI proceso {interactions:,} interacciones con {100-esc_rate:.1f}% resolucion automatica."
+                ))
+
+                if esc_rate < 10:
+                    insights.append(f"Excelente tasa de escalamiento ({esc_rate:.1f}%). El AI resuelve la mayoria de consultas.")
+                elif esc_rate < 25:
+                    insights.append(f"Tasa de escalamiento moderada ({esc_rate:.1f}%). Revisar casos comunes para mejorar.")
+                else:
+                    insights.append(f"Alta tasa de escalamiento ({esc_rate:.1f}%). Requiere entrenamiento adicional del modelo.")
+
+        # === ANALISIS DE TENDENCIAS (Time Series) ===
+        if payload.time_series:
+            for ts in payload.time_series:
+                if ts.points and len(ts.points) >= 2:
+                    values = [p.value for p in ts.points]
+                    first_val = values[0]
+                    last_val = values[-1]
+                    max_val = max(values)
+                    min_val = min(values)
+                    avg_val = sum(values) / len(values)
+
+                    # Calcular tendencia
+                    change_pct = ((last_val - first_val) / first_val * 100) if first_val > 0 else 0
+
+                    # Detectar volatilidad
+                    volatility = (max_val - min_val) / avg_val * 100 if avg_val > 0 else 0
+
+                    # Detectar picos
+                    peak_idx = values.index(max_val)
+                    peak_date = ts.points[peak_idx].date if peak_idx < len(ts.points) else "N/A"
+
+                    if "sales" in ts.series_name.lower():
+                        if change_pct > 10:
+                            insights.append(f"Tendencia alcista (+{change_pct:.1f}%) en el periodo. Momentum positivo de ventas.")
+                        elif change_pct < -10:
+                            insights.append(f"Tendencia bajista ({change_pct:.1f}%). Analizar factores de mercado y competencia.")
+                        else:
+                            insights.append(f"Ventas estables (variacion {change_pct:+.1f}%). Mercado en consolidacion.")
+
+                        if volatility > 50:
+                            insights.append(f"Alta volatilidad detectada. Pico maximo el {peak_date} con ${max_val:,.0f}.")
+
+        # === ANALISIS DE TOP PRODUCTOS ===
+        if payload.top_items:
+            for top in payload.top_items:
+                if top.items and len(top.items) >= 3:
+                    items = top.items[:10]  # Top 10
+                    total_top_value = sum(i.value for i in items)
+                    top1_value = items[0].value
+                    top3_value = sum(i.value for i in items[:3])
+
+                    # Concentracion de ventas
+                    concentration = (top1_value / total_top_value * 100) if total_top_value > 0 else 0
+                    top3_concentration = (top3_value / total_top_value * 100) if total_top_value > 0 else 0
+
+                    # Producto estrella
+                    star_product = items[0].title[:50]
+                    insights.append(f"Producto estrella: '{star_product}' lidera con ${top1_value:,.0f}.")
+
+                    if concentration > 30:
+                        insights.append(f"Alta concentracion ({concentration:.0f}% en #1). Diversificar para reducir riesgo.")
+                    elif top3_concentration > 60:
+                        insights.append(f"Top 3 concentra {top3_concentration:.0f}% de ingresos. Portafolio concentrado.")
+
+                    # Comparar top productos
+                    if len(items) >= 2:
+                        gap = ((items[0].value - items[1].value) / items[1].value * 100) if items[1].value > 0 else 0
+                        if gap > 50:
+                            insights.append(f"Brecha significativa ({gap:.0f}%) entre #1 y #2. Lider claro del mercado.")
+
+        # === CONSTRUIR NARRATIVAS FINALES ===
+
+        # Agregar summary si hay insights
+        if insights:
+            # Tomar los 3 insights mas relevantes
+            for insight in insights[:4]:
+                narratives.append(NarrativeConfig(
+                    type="insight",
+                    text=insight
+                ))
+
+            # Recomendacion basada en los datos
+            if payload.kpis and payload.kpis.total_sales:
+                if payload.time_series:
+                    values = [p.value for p in payload.time_series[0].points] if payload.time_series[0].points else []
+                    if values:
+                        change = ((values[-1] - values[0]) / values[0] * 100) if values[0] > 0 else 0
+                        if change < -5:
+                            narratives.append(NarrativeConfig(
+                                type="callout",
+                                text="📊 Recomendacion: Revisar estrategia de pricing y promociones para revertir tendencia."
+                            ))
+                        elif change > 15:
+                            narratives.append(NarrativeConfig(
+                                type="callout",
+                                text="🚀 Recomendacion: Aprovechar momentum positivo con campañas de cross-selling."
+                            ))
+                        else:
+                            narratives.append(NarrativeConfig(
+                                type="callout",
+                                text="💡 Recomendacion: Mantener estrategia actual y monitorear metricas clave."
+                            ))
+
+        # Fallback si no hay narrativas
         if not narratives:
             narratives.append(NarrativeConfig(
                 type="summary",
-                text="Datos cargados correctamente."
+                text="Datos procesados. Revisa las visualizaciones para detalles."
             ))
 
         return narratives
+
+    def _generate_demo_narrative(self, payload: DataPayload) -> List[NarrativeConfig]:
+        """Wrapper para modo demo - usa smart narrative"""
+        return self._generate_smart_narrative(payload)
 
     def generate_narrative(self, question: str, payload: DataPayload) -> tuple[List[NarrativeConfig], str]:
         """
@@ -421,11 +719,13 @@ Genera insights basados en estos datos."""
             return narratives, conclusion
 
         except Exception as e:
-            print(f"Error generando narrativa: {e}")
-            return [NarrativeConfig(
-                type="summary",
-                text="Datos cargados correctamente. Revisa los graficos para mas detalles."
-            )], ""
+            print(f"Error generando narrativa con LLM: {e}")
+            print(f"[PresentationAgent] Usando smart narrative como fallback...")
+            # Usar analisis inteligente sin LLM como fallback
+            narratives = self._generate_smart_narrative(payload)
+            # Generar conclusion basada en datos
+            conclusion = self._generate_quick_conclusion(question, payload)
+            return narratives, conclusion
 
     def validate_refs(self, spec: DashboardSpec, available_refs: List[str]) -> DashboardSpec:
         """

@@ -34,6 +34,16 @@ class TableConfig(BaseModel):
     max_rows: int = Field(10, description="Maximo de filas")
 
 
+class ComparisonChartConfig(BaseModel):
+    """Configuracion de un grafico de comparacion entre periodos"""
+    type: Literal["comparison_bar", "comparison_kpi"] = Field(...)
+    title: str = Field(..., description="Titulo del grafico de comparacion")
+    current_label: str = Field(..., description="Etiqueta del periodo actual")
+    previous_label: str = Field(..., description="Etiqueta del periodo anterior")
+    metrics: List[str] = Field(..., description="Metricas a comparar (total_sales, total_orders, etc)")
+    dataset_ref: str = Field("comparison", description="Referencia al dataset de comparacion")
+
+
 class NarrativeConfig(BaseModel):
     """Configuracion de un bloque narrativo"""
     type: Literal["headline", "insight", "callout", "summary"] = "summary"
@@ -45,7 +55,7 @@ class SlotConfig(BaseModel):
     """Configuracion de slots del dashboard"""
     filters: List[dict] = Field(default_factory=list, description="Filtros activos")
     series: List[KpiCardConfig] = Field(default_factory=list, description="KPI cards")
-    charts: List[Union[ChartConfig, TableConfig]] = Field(default_factory=list, description="Graficos y tablas")
+    charts: List[Union[ChartConfig, TableConfig, ComparisonChartConfig]] = Field(default_factory=list, description="Graficos, tablas y comparaciones")
     narrative: List[NarrativeConfig] = Field(default_factory=list, description="Narrativa/insights")
 
 

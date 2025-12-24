@@ -34,10 +34,13 @@ from ..schemas.payload import (
     TimeSeriesPoint,
     TopItemsData,
     TopItem,
-    DatasetMeta
+    DatasetMeta,
+    ComparisonData,
+    ComparisonPeriod
 )
 from ..schemas.intent import QueryPlan
 from ..prompts.ultrathink import get_query_decision_prompt
+from ..utils.date_parser import extract_comparison_dates, is_comparison_query
 
 
 def retry_with_backoff(max_retries: int = 3, base_delay: float = 2.0, max_delay: float = 60.0):
@@ -399,15 +402,113 @@ Responde SOLO con el JSON de queries a ejecutar."""
 
         return payload
 
+    def _calculate_delta_pct(self, current: Optional[float], previous: Optional[float]) -> Optional[float]:
+        """Calcula el porcentaje de cambio entre dos valores."""
+        if current is None or previous is None or previous == 0:
+            return None
+        return round(((current - previous) / previous) * 100, 2)
+
     def run(self, question: str, date_from: Optional[str] = None, date_to: Optional[str] = None) -> DataPayload:
         """
         Entry point principal del DataAgent.
-        1. Decide que queries ejecutar
-        2. Ejecuta el plan
-        3. Retorna el payload
+        1. Detecta si es comparación entre periodos
+        2. Decide que queries ejecutar
+        3. Ejecuta el plan (2 veces si es comparación)
+        4. Retorna el payload con datos de comparación si aplica
         """
         import sys
         print(f"[DataAgent.run] Question: {question[:50]}, date_from={date_from}, date_to={date_to}", file=sys.stderr, flush=True)
+
+        # Detectar si es una comparación
+        comparison_info = extract_comparison_dates(question)
+
+        if comparison_info.is_comparison and comparison_info.previous_period:
+            print(f"[DataAgent] COMPARACION detectada: {comparison_info.current_period.label} vs {comparison_info.previous_period.label}", file=sys.stderr, flush=True)
+
+            # Paso 1: Decidir queries
+            plan = self.decide_queries(question, date_from, date_to)
+            print(f"[DataAgent] Plan decidido: {plan.query_ids}", file=sys.stderr, flush=True)
+
+            # Paso 2: Ejecutar para periodo ACTUAL
+            current_date_from = comparison_info.current_period.date_from
+            current_date_to = comparison_info.current_period.date_to
+            print(f"[DataAgent] Ejecutando periodo ACTUAL: {current_date_from} a {current_date_to}", file=sys.stderr, flush=True)
+            payload_current = self.execute_plan(plan, current_date_from, current_date_to)
+
+            # Paso 3: Ejecutar para periodo ANTERIOR
+            prev_date_from = comparison_info.previous_period.date_from
+            prev_date_to = comparison_info.previous_period.date_to
+            print(f"[DataAgent] Ejecutando periodo ANTERIOR: {prev_date_from} a {prev_date_to}", file=sys.stderr, flush=True)
+            payload_previous = self.execute_plan(plan, prev_date_from, prev_date_to)
+
+            # Paso 4: Construir estructura de comparación
+            current_kpis = payload_current.kpis
+            previous_kpis = payload_previous.kpis
+
+            # Calcular deltas
+            delta_sales = None
+            delta_sales_pct = None
+            delta_orders = None
+            delta_orders_pct = None
+            delta_avg_order = None
+            delta_avg_order_pct = None
+            delta_units = None
+            delta_units_pct = None
+
+            if current_kpis and previous_kpis:
+                if current_kpis.total_sales is not None and previous_kpis.total_sales is not None:
+                    delta_sales = round(current_kpis.total_sales - previous_kpis.total_sales, 2)
+                    delta_sales_pct = self._calculate_delta_pct(current_kpis.total_sales, previous_kpis.total_sales)
+
+                if current_kpis.total_orders is not None and previous_kpis.total_orders is not None:
+                    delta_orders = current_kpis.total_orders - previous_kpis.total_orders
+                    delta_orders_pct = self._calculate_delta_pct(float(current_kpis.total_orders), float(previous_kpis.total_orders))
+
+                if current_kpis.avg_order_value is not None and previous_kpis.avg_order_value is not None:
+                    delta_avg_order = round(current_kpis.avg_order_value - previous_kpis.avg_order_value, 2)
+                    delta_avg_order_pct = self._calculate_delta_pct(current_kpis.avg_order_value, previous_kpis.avg_order_value)
+
+                if current_kpis.total_units is not None and previous_kpis.total_units is not None:
+                    delta_units = current_kpis.total_units - previous_kpis.total_units
+                    delta_units_pct = self._calculate_delta_pct(float(current_kpis.total_units), float(previous_kpis.total_units))
+
+            comparison_data = ComparisonData(
+                is_comparison=True,
+                current_period=ComparisonPeriod(
+                    label=comparison_info.current_period.label,
+                    date_from=current_date_from,
+                    date_to=current_date_to,
+                    kpis=current_kpis
+                ),
+                previous_period=ComparisonPeriod(
+                    label=comparison_info.previous_period.label,
+                    date_from=prev_date_from,
+                    date_to=prev_date_to,
+                    kpis=previous_kpis
+                ),
+                delta_sales=delta_sales,
+                delta_sales_pct=delta_sales_pct,
+                delta_orders=delta_orders,
+                delta_orders_pct=delta_orders_pct,
+                delta_avg_order=delta_avg_order,
+                delta_avg_order_pct=delta_avg_order_pct,
+                delta_units=delta_units,
+                delta_units_pct=delta_units_pct
+            )
+
+            # El payload final usa los KPIs del periodo actual pero incluye comparison
+            payload_current.comparison = comparison_data
+            payload_current.available_refs.append("comparison")
+
+            print(f"[DataAgent] Comparación calculada:", file=sys.stderr, flush=True)
+            print(f"  - Ventas actuales: {current_kpis.total_sales if current_kpis else 'N/A'}", file=sys.stderr, flush=True)
+            print(f"  - Ventas anteriores: {previous_kpis.total_sales if previous_kpis else 'N/A'}", file=sys.stderr, flush=True)
+            print(f"  - Delta: {delta_sales} ({delta_sales_pct}%)", file=sys.stderr, flush=True)
+
+            return payload_current
+
+        # Flujo normal (sin comparación)
+        print(f"[DataAgent] Flujo normal (sin comparación)", file=sys.stderr, flush=True)
 
         # Paso 1: Decidir queries
         plan = self.decide_queries(question, date_from, date_to)

@@ -1,52 +1,383 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
-:root {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+/* ============================================
+   SQL-AGENT v2.0 - OLED Black Architecture
+   Tailwind CSS v4 - CSS-First Configuration
+   ============================================ */
+
+@theme {
+  /* === OLED Black Color System === */
+  --color-background: #000000;
+  --color-foreground: #fafafa;
+
+  /* Glass surfaces */
+  --color-surface-1: rgba(255, 255, 255, 0.02);
+  --color-surface-2: rgba(255, 255, 255, 0.04);
+  --color-surface-3: rgba(255, 255, 255, 0.06);
+
+  /* Border glow */
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-border-default: rgba(255, 255, 255, 0.10);
+  --color-border-glow: rgba(255, 255, 255, 0.15);
+
+  /* Accent colors - Emerald/Neon system */
+  --color-accent-emerald: #10b981;
+  --color-accent-emerald-glow: rgba(16, 185, 129, 0.4);
+  --color-accent-neon-red: #ff3366;
+  --color-accent-neon-red-glow: rgba(255, 51, 102, 0.4);
+  --color-accent-blue: #3b82f6;
+  --color-accent-blue-glow: rgba(59, 130, 246, 0.3);
+  --color-accent-purple: #8b5cf6;
+  --color-accent-purple-glow: rgba(139, 92, 246, 0.3);
+  --color-accent-cyan: #06b6d4;
+
+  /* Text hierarchy */
+  --color-text-primary: #ffffff;
+  --color-text-secondary: rgba(255, 255, 255, 0.7);
+  --color-text-muted: rgba(255, 255, 255, 0.5);
+  --color-text-subtle: rgba(255, 255, 255, 0.3);
+
+  /* === Typography - Geist Font System === */
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", monospace;
+
+  /* Font sizes with optical adjustments */
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 1.875rem;
+  --text-4xl: 2.25rem;
+
+  /* Letter spacing for 4K legibility */
+  --tracking-tighter: -0.02em;
+  --tracking-tight: -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.02em;
+
+  /* === Spacing System === */
+  --spacing-px: 1px;
+  --spacing-0: 0px;
+  --spacing-1: 0.25rem;
+  --spacing-2: 0.5rem;
+  --spacing-3: 0.75rem;
+  --spacing-4: 1rem;
+  --spacing-5: 1.25rem;
+  --spacing-6: 1.5rem;
+  --spacing-8: 2rem;
+  --spacing-10: 2.5rem;
+  --spacing-12: 3rem;
+  --spacing-16: 4rem;
+
+  /* === Border Radius - Soft curves === */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --radius-3xl: 1.5rem;
+  --radius-full: 9999px;
+
+  /* === Shadows - Depth system === */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.5), 0 2px 4px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5), 0 4px 6px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.5), 0 10px 10px rgba(0, 0, 0, 0.4);
+  --shadow-glow-emerald: 0 0 20px var(--color-accent-emerald-glow);
+  --shadow-glow-red: 0 0 20px var(--color-accent-neon-red-glow);
+  --shadow-glow-blue: 0 0 15px var(--color-accent-blue-glow);
+
+  /* === Backdrop Blur === */
+  --blur-sm: 4px;
+  --blur-md: 8px;
+  --blur-lg: 16px;
+  --blur-xl: 24px;
+  --blur-2xl: 40px;
+  --blur-3xl: 64px;
+
+  /* === Transitions === */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-spring: 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* === Base Styles === */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-sans);
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  line-height: 1.6;
+  letter-spacing: var(--tracking-normal);
 }
 
-/* Custom scrollbar */
+/* === Custom Scrollbar - Minimal === */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #1a1a1a;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #333;
-  border-radius: 4px;
+  background: var(--color-border-default);
+  border-radius: var(--radius-full);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #444;
+  background: var(--color-border-glow);
 }
 
-/* Loading animation */
-@keyframes pulse {
+/* === Glass-Hydration Card Base === */
+.glass-card {
+  background: var(--color-surface-1);
+  backdrop-filter: blur(var(--blur-xl));
+  -webkit-backdrop-filter: blur(var(--blur-xl));
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  transition: all var(--transition-normal);
+}
+
+.glass-card:hover {
+  background: var(--color-surface-2);
+  border-color: var(--color-border-default);
+}
+
+/* === Glass Tooltip - High Refraction === */
+.glass-tooltip {
+  background: rgba(10, 10, 10, 0.95);
+  backdrop-filter: blur(var(--blur-2xl));
+  -webkit-backdrop-filter: blur(var(--blur-2xl));
+  border: 1px solid var(--color-border-glow);
+  border-radius: var(--radius-xl);
+  box-shadow:
+    var(--shadow-xl),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+/* === Border Glow Effect === */
+.border-glow {
+  position: relative;
+}
+
+.border-glow::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.1),
+    rgba(255, 255, 255, 0.05),
+    rgba(255, 255, 255, 0.02),
+    rgba(255, 255, 255, 0.05)
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* === KPI Card with subtle depth === */
+.kpi-card {
+  background: linear-gradient(
+    135deg,
+    var(--color-surface-2) 0%,
+    var(--color-surface-1) 100%
+  );
+  backdrop-filter: blur(var(--blur-lg));
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  transition: all var(--transition-normal);
+}
+
+.kpi-card:hover {
+  border-color: var(--color-border-default);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+/* === Chart Container === */
+.chart-container {
+  background: linear-gradient(
+    180deg,
+    var(--color-surface-2) 0%,
+    var(--color-surface-1) 50%,
+    transparent 100%
+  );
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-2xl);
+  overflow: hidden;
+}
+
+/* === Bento Grid === */
+.bento-grid {
+  display: grid;
+  gap: var(--spacing-4);
+  grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: minmax(120px, auto);
+}
+
+.bento-item-span-2 {
+  grid-column: span 2;
+}
+
+.bento-item-span-3 {
+  grid-column: span 3;
+}
+
+.bento-item-span-4 {
+  grid-column: span 4;
+}
+
+.bento-item-row-2 {
+  grid-row: span 2;
+}
+
+@media (max-width: 1024px) {
+  .bento-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .bento-item-span-3,
+  .bento-item-span-4 {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 640px) {
+  .bento-grid {
+    grid-template-columns: 1fr;
+  }
+  .bento-item-span-2,
+  .bento-item-span-3,
+  .bento-item-span-4 {
+    grid-column: span 1;
+  }
+}
+
+/* === Adaptive Gradient for Charts === */
+.gradient-up {
+  --chart-gradient-start: var(--color-accent-emerald);
+  --chart-gradient-end: rgba(16, 185, 129, 0.1);
+}
+
+.gradient-down {
+  --chart-gradient-start: var(--color-accent-neon-red);
+  --chart-gradient-end: rgba(255, 51, 102, 0.1);
+}
+
+/* === Animations === */
+@keyframes pulse-glow {
   0%, 100% {
     opacity: 1;
+    box-shadow: 0 0 10px var(--color-accent-blue-glow);
   }
   50% {
-    opacity: 0.5;
+    opacity: 0.7;
+    box-shadow: 0 0 20px var(--color-accent-blue-glow);
   }
 }
 
-.animate-pulse {
-  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-/* Chart container */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.4s ease-out;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* === Recharts Overrides === */
 .recharts-responsive-container {
   width: 100% !important;
+}
+
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: var(--color-border-subtle);
+}
+
+.recharts-tooltip-wrapper {
+  outline: none !important;
+}
+
+/* === Selection === */
+::selection {
+  background: var(--color-accent-blue);
+  color: white;
+}
+
+/* === Focus States === */
+:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: 2px;
+}
+
+/* === Code/SQL Blocks === */
+code, pre {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  letter-spacing: -0.01em;
+}
+
+pre {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-4);
+  overflow-x: auto;
+}
+
+/* === View Transitions API Support === */
+@supports (view-transition-name: main) {
+  ::view-transition-old(main),
+  ::view-transition-new(main) {
+    animation-duration: 0.3s;
+  }
 }

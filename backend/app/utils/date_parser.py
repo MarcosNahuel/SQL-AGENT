@@ -9,11 +9,13 @@ Ejemplos:
 - "ultimo mes" -> (hace 30 dias, hoy)
 - "ayer" -> (ayer, ayer+1)
 - "esta semana" -> (lunes, domingo+1)
+- "diciembre vs noviembre" -> ComparisonDateRange con ambos periodos
 """
 import re
 from datetime import date, timedelta
-from typing import Tuple, Optional
+from typing import Tuple, Optional, NamedTuple, List
 from calendar import monthrange
+from dataclasses import dataclass
 
 
 # Mapeo de meses en espanol a numero
@@ -31,6 +33,32 @@ SPANISH_MONTHS = {
     "noviembre": 11, "nov": 11,
     "diciembre": 12, "dic": 12,
 }
+
+# Patrones para detectar comparaciones
+COMPARISON_PATTERNS = [
+    r'\bvs\.?\b',
+    r'\bversus\b',
+    r'\bcontra\b',
+    r'\bcomparado?\s+con\b',
+    r'\bcomparacion\s+(?:con|de|entre)\b',
+    r'\bdiferencia\s+(?:con|entre)\b',
+]
+
+
+@dataclass
+class DatePeriod:
+    """Un periodo de fechas con etiqueta"""
+    label: str
+    date_from: str
+    date_to: str
+
+
+@dataclass
+class ComparisonDateRange:
+    """Rango de fechas para comparacion entre dos periodos"""
+    is_comparison: bool
+    current_period: DatePeriod
+    previous_period: Optional[DatePeriod] = None
 
 # Mapeo de trimestres
 QUARTERS = {
@@ -253,6 +281,160 @@ def format_date_context(date_from: Optional[str], date_to: Optional[str]) -> str
         return f"{date_from} a {date_to}"
 
 
+def _extract_month_from_text(text: str, default_year: int) -> Optional[Tuple[int, int]]:
+    """Extrae mes y año de un fragmento de texto."""
+    text = text.lower().strip()
+
+    # Buscar "mes año" o "mes de año"
+    for month_name, month_num in SPANISH_MONTHS.items():
+        pattern = rf'\b{month_name}\s*(?:de\s+)?(\d{{4}})?\b'
+        match = re.search(pattern, text)
+        if match:
+            year = int(match.group(1)) if match.group(1) else default_year
+            return (month_num, year)
+
+    # Buscar solo mes (sin año)
+    for month_name, month_num in SPANISH_MONTHS.items():
+        if month_name in text:
+            return (month_num, default_year)
+
+    return None
+
+
+def is_comparison_query(question: str) -> bool:
+    """Detecta si la pregunta es una comparación entre periodos."""
+    q = question.lower()
+    for pattern in COMPARISON_PATTERNS:
+        if re.search(pattern, q):
+            return True
+    return False
+
+
+def extract_comparison_dates(question: str) -> ComparisonDateRange:
+    """
+    Extrae fechas de una pregunta de comparación.
+
+    Detecta patrones como:
+    - "diciembre 2025 vs noviembre"
+    - "este mes comparado con el anterior"
+    - "ventas de dic contra nov 2024"
+
+    Returns:
+        ComparisonDateRange con ambos periodos si es comparación,
+        o solo el periodo actual si no lo es.
+    """
+    q = question.lower().strip()
+    today = date.today()
+
+    # Si no es comparación, usar extracción normal
+    if not is_comparison_query(question):
+        date_from, date_to = extract_date_range(question)
+        label = format_date_context(date_from, date_to)
+        return ComparisonDateRange(
+            is_comparison=False,
+            current_period=DatePeriod(
+                label=label,
+                date_from=date_from or (today - timedelta(days=30)).isoformat(),
+                date_to=date_to or (today + timedelta(days=1)).isoformat()
+            )
+        )
+
+    # Es una comparación - dividir por el patrón de comparación
+    split_pattern = r'\s*(?:vs\.?|versus|contra|comparado?\s+con|comparacion\s+(?:con|de)|diferencia\s+(?:con|entre))\s*'
+    parts = re.split(split_pattern, q, maxsplit=1)
+
+    if len(parts) < 2:
+        # No se pudo dividir, extraer fecha normal
+        date_from, date_to = extract_date_range(question)
+        label = format_date_context(date_from, date_to)
+        return ComparisonDateRange(
+            is_comparison=False,
+            current_period=DatePeriod(
+                label=label,
+                date_from=date_from or (today - timedelta(days=30)).isoformat(),
+                date_to=date_to or (today + timedelta(days=1)).isoformat()
+            )
+        )
+
+    part1, part2 = parts[0], parts[1]
+
+    # Extraer fechas de cada parte
+    # Primero intentar extraer mes/año de cada parte
+    month1 = _extract_month_from_text(part1, today.year)
+    month2 = _extract_month_from_text(part2, today.year)
+
+    # Si no encontró en las partes, buscar en toda la pregunta para inferir
+    if not month1:
+        date_from1, date_to1 = extract_date_range(part1)
+        if date_from1:
+            month1_date = date.fromisoformat(date_from1)
+            month1 = (month1_date.month, month1_date.year)
+
+    if not month2:
+        date_from2, date_to2 = extract_date_range(part2)
+        if date_from2:
+            month2_date = date.fromisoformat(date_from2)
+            month2 = (month2_date.month, month2_date.year)
+
+    # Si aún no hay month2 pero hay month1, inferir mes anterior
+    if month1 and not month2:
+        # Buscar si menciona "mes pasado", "anterior", etc.
+        if any(kw in part2 for kw in ["pasado", "anterior", "previo"]):
+            prev_month = month1[0] - 1 if month1[0] > 1 else 12
+            prev_year = month1[1] if month1[0] > 1 else month1[1] - 1
+            month2 = (prev_month, prev_year)
+        # Si la parte2 solo tiene nombre de mes, usar mismo año o año anterior
+        else:
+            for month_name, month_num in SPANISH_MONTHS.items():
+                if month_name in part2.lower():
+                    # Si el mes comparado es mayor, probablemente es del año anterior
+                    if month_num > month1[0]:
+                        month2 = (month_num, month1[1] - 1)
+                    else:
+                        month2 = (month_num, month1[1])
+                    break
+
+    # Si no hay month1 pero hay month2, month1 es el actual
+    if month2 and not month1:
+        month1 = (today.month, today.year)
+
+    # Si no hay ninguno, usar default
+    if not month1:
+        month1 = (today.month, today.year)
+    if not month2:
+        # Mes anterior por defecto
+        month2 = (month1[0] - 1 if month1[0] > 1 else 12,
+                  month1[1] if month1[0] > 1 else month1[1] - 1)
+
+    # Construir rangos de fecha
+    current_from, current_to = _get_month_range(month1[1], month1[0])
+    previous_from, previous_to = _get_month_range(month2[1], month2[0])
+
+    # Labels amigables
+    month_names = {
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+        5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+        9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+    }
+
+    current_label = f"{month_names[month1[0]]} {month1[1]}"
+    previous_label = f"{month_names[month2[0]]} {month2[1]}"
+
+    return ComparisonDateRange(
+        is_comparison=True,
+        current_period=DatePeriod(
+            label=current_label,
+            date_from=current_from,
+            date_to=current_to
+        ),
+        previous_period=DatePeriod(
+            label=previous_label,
+            date_from=previous_from,
+            date_to=previous_to
+        )
+    )
+
+
 # Test rapido
 if __name__ == "__main__":
     test_cases = [
@@ -265,6 +447,11 @@ if __name__ == "__main__":
         "resultados del Q4 2024",
         "como me fue en el cyber monday 2024",
         "hola como estas",  # Sin fecha
+        # Nuevos casos de comparación
+        "diciembre 2025 vs noviembre",
+        "ventas de dic vs nov 2024",
+        "este mes comparado con el anterior",
+        "diferencia entre enero y febrero 2025",
     ]
 
     print("=== Test de Date Parser ===\n")
@@ -273,4 +460,10 @@ if __name__ == "__main__":
         context = format_date_context(date_from, date_to)
         print(f"Q: {q}")
         print(f"   -> {date_from} a {date_to}")
-        print(f"   -> Contexto: {context}\n")
+        print(f"   -> Contexto: {context}")
+
+        # Test comparación
+        comparison = extract_comparison_dates(q)
+        if comparison.is_comparison:
+            print(f"   -> COMPARACION: {comparison.current_period.label} vs {comparison.previous_period.label}")
+        print()

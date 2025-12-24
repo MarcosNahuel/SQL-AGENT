@@ -82,13 +82,14 @@ class IntentRouter:
     # Keywords que indican necesidad de dashboard/visualizacion
     DASHBOARD_KEYWORDS = [
         "mostrame", "muestrame", "muestra", "ver", "visualiza",
-        "grafico", "graficos", "chart", "charts",
+        "grafico", "graficos", "gráfico", "gráficos", "chart", "charts",
         "dashboard", "panel", "reporte",
-        "tendencia", "tendencias", "evolucion",
-        "comparar", "comparacion", "versus", "vs",
-        "analisis", "analiza", "analizar",
+        "tendencia", "tendencias", "evolucion", "evolución",
+        "comparar", "comparacion", "comparación", "versus", "vs",
+        "analisis", "análisis", "analiza", "analizar",  # Con y sin acento
+        "pareto", "insight", "insights", "resumen", "ticket",
         # Preguntas analiticas complejas
-        "reposicion", "reponer", "necesitar", "recomendar",
+        "reposicion", "reposición", "reponer", "necesitar", "recomendar",
         "bajo stock", "alta rotacion", "rotacion",
         "proyeccion", "proyectar", "estimar", "predecir",
         "margen", "ganancia", "beneficio",

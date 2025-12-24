@@ -140,6 +140,18 @@ class DataAgent:
         elif "escalad" in q_lower:
             query_ids = ["escalated_cases", "ai_interactions_summary"]
 
+        # Insights / Analisis profundo - requiere KPIs + tendencias + productos
+        elif any(kw in q_lower for kw in ["insight", "analisis profundo", "análisis profundo", "analiza todo", "resumen ejecutivo", "executive summary"]):
+            query_ids = ["kpi_sales_summary", "ts_sales_by_day", "top_products_by_revenue"]
+
+        # Pareto / 80-20 / Concentracion - ventas por producto
+        elif any(kw in q_lower for kw in ["pareto", "80/20", "80-20", "concentracion", "concentración", "abc"]):
+            query_ids = ["kpi_sales_summary", "top_products_by_revenue", "ts_sales_by_day"]
+
+        # Ticket promedio / Ticket alto / Ticket bajo
+        elif any(kw in q_lower for kw in ["ticket", "promedio de compra", "valor promedio", "orden promedio"]):
+            query_ids = ["kpi_sales_summary", "ts_sales_by_day", "recent_orders"]
+
         # Top productos / Mas vendidos (ANTES de inventario para priorizar)
         elif any(kw in q_lower for kw in ["mas vendido", "más vendido", "mas vendidos", "más vendidos", "top producto", "top productos", "mejores producto", "mejores productos"]):
             query_ids = ["kpi_sales_summary", "top_products_by_revenue"]

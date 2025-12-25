@@ -184,20 +184,20 @@ class DataAgent:
         elif any(kw in q_lower for kw in ["venta", "factura", "ingreso", "revenue", "vendido", "vendieron", "facturado"]):
             query_ids = ["kpi_sales_summary", "ts_sales_by_day", "top_products_by_revenue"]
 
-        # Quiebre de stock / Reposición - necesita KPIs + productos low stock + top ventas
+        # Quiebre de stock / Reposición - necesita análisis de stock + serie temporal + top ventas
         elif any(kw in q_lower for kw in ["quebrar", "quiebre", "agotar", "agotarse", "agotando", "faltante", "reponer", "reposicion", "reposición"]):
-            query_ids = ["kpi_sales_summary", "products_low_stock", "top_products_by_revenue"]
+            query_ids = ["kpi_sales_summary", "stock_reorder_analysis", "ts_top_product_sales"]
 
-        # Aumentar stock / Ponderar productos - necesita inventario + ventas
+        # Aumentar stock / Ponderar productos - necesita inventario + análisis de stock + ventas
         elif any(kw in q_lower for kw in ["aumentar stock", "aumentar inventario", "ponderar", "priorizar", "debo comprar"]):
-            query_ids = ["kpi_sales_summary", "products_low_stock", "top_products_by_revenue", "products_inventory"]
+            query_ids = ["kpi_sales_summary", "stock_reorder_analysis", "ts_top_product_sales", "products_low_stock"]
 
         # Inventario / Stock (sin "vendido")
         elif any(kw in q_lower for kw in ["inventario", "stock", "existencia"]):
-            if any(kw in q_lower for kw in ["bajo", "alerta", "falta"]):
-                query_ids = ["kpi_sales_summary", "products_low_stock", "top_products_by_revenue"]
+            if any(kw in q_lower for kw in ["bajo", "alerta", "falta", "critico", "crítico"]):
+                query_ids = ["kpi_sales_summary", "stock_reorder_analysis", "ts_top_product_sales"]
             else:
-                query_ids = ["kpi_sales_summary", "products_inventory", "products_low_stock"]
+                query_ids = ["kpi_sales_summary", "products_inventory", "stock_reorder_analysis"]
 
         # Productos (generico, sin "vendido")
         elif "producto" in q_lower and not any(kw in q_lower for kw in ["vendido", "venta", "revenue"]):
@@ -268,9 +268,15 @@ class DataAgent:
 ## GUIA RAPIDA:
 - Ventas/facturacion: kpi_sales_summary, ts_sales_by_day, top_products_by_revenue
 - Stock/inventario: products_inventory, products_low_stock, stock_alerts
+- Reposicion/quiebre stock: stock_reorder_analysis, ts_top_product_sales, kpi_sales_summary
 - Agente AI/bot: ai_interactions_summary, recent_ai_interactions, escalated_cases
 - Escalados/pendientes: escalated_cases, interactions_by_case_type
 - Preventa: preventa_summary, recent_preventa_queries
+
+## IMPORTANTE PARA GRAFICOS:
+- Siempre incluir al menos una query de time_series (ts_*) para graficos de linea
+- Siempre incluir al menos una query de top_items (top.*) para graficos de barras
+- Esto asegura que el dashboard muestre 2 graficos distintos
 
 FORMATO JSON (sin markdown):
 {{"query_ids": ["query_id1", "query_id2"], "params": {{"limit": 10}}}}

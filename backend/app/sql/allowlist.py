@@ -254,6 +254,86 @@ QUERY_ALLOWLIST: Dict[str, Dict[str, Any]] = {
         }
     },
 
+    "stock_reorder_analysis": {
+        "description": "Analisis de productos que necesitan reposicion con metricas de stock y ventas",
+        "output_type": "top_items",
+        "output_ref": "top.stock_reorder",
+        "template": """
+            SELECT
+                ROW_NUMBER() OVER (ORDER BY COALESCE(o.total_revenue, 0) DESC) as rank,
+                i.item_id as id,
+                i.title,
+                COALESCE(o.total_revenue, 0) as value,
+                i.available_quantity as stock,
+                COALESCE(o.units_sold, 0) as units_sold,
+                CASE
+                    WHEN COALESCE(o.daily_avg, 0) > 0
+                    THEN ROUND(i.available_quantity / o.daily_avg)
+                    ELSE 999
+                END as days_cover
+            FROM ml_items i
+            LEFT JOIN (
+                SELECT
+                    item_id,
+                    SUM(total_amount) as total_revenue,
+                    SUM(quantity) as units_sold,
+                    SUM(quantity)::numeric / GREATEST(1, DATE_PART('day', NOW() - MIN(date_created))) as daily_avg
+                FROM ml_orders
+                WHERE status = 'paid'
+                  AND date_created >= %(date_from)s
+                  AND date_created < %(date_to)s
+                GROUP BY item_id
+            ) o ON i.item_id = o.item_id
+            WHERE i.status = 'active'
+              AND i.available_quantity < 50
+              AND COALESCE(o.total_revenue, 0) > 0
+            ORDER BY value DESC
+            LIMIT %(limit)s
+        """,
+        "required_params": ["date_from", "date_to"],
+        "default_params": {
+            "date_from": lambda: (date.today() - timedelta(days=30)).isoformat(),
+            "date_to": lambda: (date.today() + timedelta(days=1)).isoformat(),
+            "limit": lambda: 10
+        }
+    },
+
+    "ts_top_product_sales": {
+        "description": "Serie temporal de ventas del producto mas vendido para ver tendencia",
+        "output_type": "time_series",
+        "output_ref": "ts.top_product_sales",
+        "template": """
+            WITH top_product AS (
+                SELECT item_id
+                FROM ml_orders
+                WHERE status = 'paid'
+                  AND date_created >= %(date_from)s
+                  AND date_created < %(date_to)s
+                GROUP BY item_id
+                ORDER BY SUM(total_amount) DESC
+                LIMIT 1
+            )
+            SELECT
+                DATE(o.date_created) as date,
+                SUM(o.total_amount) as value,
+                SUM(o.quantity) as units
+            FROM ml_orders o
+            JOIN top_product tp ON o.item_id = tp.item_id
+            WHERE o.status = 'paid'
+              AND o.date_created >= %(date_from)s
+              AND o.date_created < %(date_to)s
+            GROUP BY DATE(o.date_created)
+            ORDER BY date ASC
+            LIMIT %(limit)s
+        """,
+        "required_params": ["date_from", "date_to"],
+        "default_params": {
+            "date_from": lambda: (date.today() - timedelta(days=30)).isoformat(),
+            "date_to": lambda: (date.today() + timedelta(days=1)).isoformat(),
+            "limit": lambda: 31
+        }
+    },
+
     # ============== VENTAS (ml_orders) ==============
 
     # KPIs de ventas

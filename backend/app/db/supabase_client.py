@@ -214,6 +214,8 @@ class SupabaseRESTClient:
             rows = self._execute_stock_alerts(safe_params)
         elif query_id == "kpi_inventory_summary":
             rows = self._execute_kpi_inventory_summary(safe_params)
+        elif query_id == "stock_reorder_analysis":
+            rows = self._execute_stock_reorder_analysis(safe_params)
         else:
             raise ValueError(f"Query '{query_id}' no implementada para REST API")
 
@@ -836,6 +838,128 @@ class SupabaseRESTClient:
                 "total_products": len(items),
                 "avg_days_cover": 0
             }]
+
+    def _execute_stock_reorder_analysis(self, params: Dict) -> List[Dict]:
+        """
+        Análisis de productos que necesitan reposición con métricas de stock y ventas.
+        Retorna top_items para generar gráfico de barras.
+        """
+        import sys
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        limit = params.get("limit", 10)
+
+        print(f"[_execute_stock_reorder_analysis] date_from={date_from}, date_to={date_to}", file=sys.stderr, flush=True)
+
+        cache_key = f"stock_reorder_{date_from}_{date_to}_{limit}"
+        cached = _query_cache.get(cache_key)
+        if cached:
+            return cached
+
+        # 1. Obtener productos activos con stock bajo (<50)
+        items = self._get_table(
+            "ml_items",
+            select="item_id,title,available_quantity,status",
+            filters={"status": "eq.active", "available_quantity": "lt.50"},
+            limit=500
+        )
+
+        if not items:
+            return []
+
+        item_ids = [item.get("item_id") for item in items if item.get("item_id")]
+        items_map = {item.get("item_id"): item for item in items}
+
+        # 2. Obtener órdenes pagadas del período
+        orders, _ = self._get_table_paginated(
+            "ml_orders",
+            select="item_id,total_amount,quantity,status,date_created",
+            max_records=100000
+        )
+
+        # 3. Agregar ventas por item_id filtrando por fecha
+        from collections import defaultdict
+        from datetime import datetime as dt
+
+        sales_by_item = defaultdict(lambda: {"revenue": 0, "units": 0, "first_sale": None, "last_sale": None})
+
+        for order in orders:
+            if order.get("status") != "paid":
+                continue
+
+            created = (order.get("date_created") or "")[:10]
+            if date_from and created < date_from:
+                continue
+            if date_to and created >= date_to:
+                continue
+
+            item_id = order.get("item_id")
+            if not item_id or item_id not in items_map:
+                continue
+
+            amount = float(order.get("total_amount", 0) or 0)
+            qty = int(order.get("quantity", 1) or 1)
+
+            sales_by_item[item_id]["revenue"] += amount
+            sales_by_item[item_id]["units"] += qty
+
+            # Track first and last sale dates for daily_avg calculation
+            if sales_by_item[item_id]["first_sale"] is None or created < sales_by_item[item_id]["first_sale"]:
+                sales_by_item[item_id]["first_sale"] = created
+            if sales_by_item[item_id]["last_sale"] is None or created > sales_by_item[item_id]["last_sale"]:
+                sales_by_item[item_id]["last_sale"] = created
+
+        # 4. Combinar datos y calcular days_cover
+        combined = []
+        for item_id, sales in sales_by_item.items():
+            if sales["revenue"] <= 0:
+                continue  # Solo productos con ventas
+
+            item_info = items_map.get(item_id, {})
+            stock = int(item_info.get("available_quantity", 0) or 0)
+
+            # Calcular daily_avg
+            days_in_period = 30  # Default
+            if sales["first_sale"] and sales["last_sale"]:
+                try:
+                    first = dt.strptime(sales["first_sale"], "%Y-%m-%d")
+                    last = dt.strptime(sales["last_sale"], "%Y-%m-%d")
+                    days_in_period = max(1, (last - first).days + 1)
+                except:
+                    pass
+
+            daily_avg = sales["units"] / days_in_period if days_in_period > 0 else 0
+            days_cover = round(stock / daily_avg) if daily_avg > 0 else 999
+
+            combined.append({
+                "item_id": item_id,
+                "title": item_info.get("title", "Sin título"),
+                "revenue": sales["revenue"],
+                "stock": stock,
+                "units_sold": sales["units"],
+                "days_cover": days_cover
+            })
+
+        # 5. Ordenar por revenue y tomar top N
+        combined.sort(key=lambda x: x["revenue"], reverse=True)
+        top_items = combined[:limit]
+
+        result = [
+            {
+                "rank": i,
+                "id": item["item_id"],
+                "title": (item["title"] or "Sin título")[:50],
+                "value": round(item["revenue"], 2),
+                "stock": item["stock"],
+                "units_sold": item["units_sold"],
+                "days_cover": item["days_cover"]
+            }
+            for i, item in enumerate(top_items, 1)
+        ]
+
+        print(f"[_execute_stock_reorder_analysis] Found {len(result)} products needing reorder", file=sys.stderr, flush=True)
+        _query_cache.set(cache_key, result)
+        return result
 
     def test_connection(self) -> bool:
         """Prueba la conexion a Supabase REST API"""

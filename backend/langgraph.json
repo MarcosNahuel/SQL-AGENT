@@ -1,7 +1,7 @@
 {
   "$schema": "https://langchain-ai.github.io/langgraph/cli/schemas/langgraph.config.json",
   "graphs": {
-    "insight_graph_v2": "app.graphs.insight_graph_v2:get_insight_graph_v2"
+    "insight_graph_v2": "app.graphs.insight_graph:get_insight_graph_v2"
   },
   "env": ".env",
   "python_version": "3.12",

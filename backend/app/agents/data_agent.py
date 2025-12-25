@@ -225,16 +225,16 @@ class DataAgent:
         elif any(kw in q_lower for kw in ["aumentar stock", "aumentar inventario", "ponderar", "priorizar", "debo comprar"]):
             query_ids = ["kpi_sales_summary", "stock_reorder_analysis", "ts_top_product_sales", "products_low_stock"]
 
-        # Inventario / Stock (sin "vendido")
+        # Inventario / Stock (sin "vendido") - INCLUIR stock_reorder_analysis para gráficos
         elif any(kw in q_lower for kw in ["inventario", "stock", "existencia"]):
             if any(kw in q_lower for kw in ["bajo", "alerta", "falta", "critico", "crítico"]):
-                query_ids = ["kpi_inventory_summary", "products_low_stock", "stock_alerts"]
+                query_ids = ["kpi_inventory_summary", "products_low_stock", "stock_reorder_analysis"]
             else:
-                query_ids = ["kpi_inventory_summary", "products_inventory", "stock_alerts"]
+                query_ids = ["kpi_inventory_summary", "stock_reorder_analysis", "stock_alerts"]
 
-        # Productos (generico, sin "vendido")
+        # Productos (generico, sin "vendido") - INCLUIR top_products_by_sales para gráficos
         elif "producto" in q_lower and not any(kw in q_lower for kw in ["vendido", "venta", "revenue"]):
-            query_ids = ["kpi_inventory_summary", "products_inventory", "products_low_stock"]
+            query_ids = ["kpi_inventory_summary", "products_inventory", "top_products_by_sales"]
 
         # Preventa
         elif any(kw in q_lower for kw in ["preventa", "consulta", "pregunta"]):
@@ -294,8 +294,14 @@ class DataAgent:
 
 ## GUÍA RÁPIDA:
 - Ventas/facturación: kpi_sales_summary, ts_sales_by_day, top_products_by_revenue
-- Stock/inventario: kpi_inventory_summary, products_low_stock, stock_alerts
+- Stock/inventario: kpi_inventory_summary, stock_reorder_analysis, stock_alerts
+- Stock crítico/bajo: kpi_inventory_summary, products_low_stock, stock_reorder_analysis
 - Agente AI/bot: ai_interactions_summary, recent_ai_interactions, escalated_cases
+
+## IMPORTANTE PARA GRÁFICOS:
+- SIEMPRE incluir al menos UNA query de tipo "top_items" o "time_series" para generar gráficos
+- stock_reorder_analysis genera gráfico de barras (top_items)
+- ts_top_product_sales genera gráfico de línea temporal
 """
 
         user_msg = f"""Pregunta del usuario: "{question}"

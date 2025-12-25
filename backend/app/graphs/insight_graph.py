@@ -624,6 +624,7 @@ def run_insight_graph_v2(
         "run_name": f"InsightGraph-v2-{trace}",
         "tags": ["sql-agent", "v2", "supervisor"],
         "metadata": {"trace_id": trace},
+        "recursion_limit": 15,  # Limit graph iterations to prevent infinite loops
         "configurable": {
             "thread_id": thread  # For checkpointer persistence
         }

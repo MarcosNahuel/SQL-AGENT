@@ -32,9 +32,11 @@ AsyncConnectionPool = None
 try:
     from langgraph.checkpoint.postgres import PostgresSaver
     from psycopg_pool import ConnectionPool
+    from psycopg.rows import dict_row
     POSTGRES_SYNC_AVAILABLE = True
     print("[Checkpointer] PostgresSaver (sync) available")
 except ImportError as e:
+    dict_row = None
     print(f"[Checkpointer] PostgresSaver (sync) not available: {e}")
 
 # Try async PostgresSaver (Unix only)
@@ -42,6 +44,7 @@ if not IS_WINDOWS:
     try:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
         from psycopg_pool import AsyncConnectionPool
+        from psycopg.rows import dict_row as async_dict_row
         POSTGRES_ASYNC_AVAILABLE = True
         print("[Checkpointer] AsyncPostgresSaver available")
     except ImportError as e:
@@ -106,7 +109,8 @@ class CheckpointerManager:
                     conninfo=postgres_url,
                     min_size=2,
                     max_size=10,
-                    open=True
+                    open=True,
+                    kwargs={"autocommit": True, "row_factory": dict_row}
                 )
 
                 # Create sync checkpointer
@@ -162,7 +166,8 @@ class CheckpointerManager:
                     conninfo=postgres_url,
                     min_size=2,
                     max_size=10,
-                    open=False
+                    open=False,
+                    kwargs={"autocommit": True, "row_factory": dict_row}
                 )
                 await self._async_pool.open()
 

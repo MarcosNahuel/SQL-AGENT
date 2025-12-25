@@ -37,6 +37,7 @@ from .db.supabase_client import get_db_client
 from .api.v1_chat import router as v1_chat_router
 from .observability.langsmith import is_langsmith_enabled
 from .memory.checkpointer import init_checkpointer, close_checkpointer, get_checkpointer_manager
+from .graphs.insight_graph_v2 import get_insight_graph_v2
 
 
 @asynccontextmanager
@@ -66,6 +67,15 @@ async def lifespan(app: FastAPI):
     if not memory_client.is_available:
         print(f"  SUPABASE_URL: {'SET' if os.getenv('SUPABASE_URL') else 'MISSING'}")
         print(f"  SUPABASE_ANON_KEY: {'SET' if os.getenv('SUPABASE_ANON_KEY') else 'MISSING'}")
+
+    # Pre-compile LangGraph v2 with checkpointer (compile once at startup)
+    try:
+        compiled_graph = get_insight_graph_v2(use_checkpointer=True)
+        app.state.graph = compiled_graph
+        print("LangGraph v2: Compiled and stored in app.state.graph")
+    except Exception as e:
+        print(f"LangGraph v2: Failed to compile - {e}")
+        app.state.graph = None
 
     yield
 

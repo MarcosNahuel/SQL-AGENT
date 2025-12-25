@@ -30,14 +30,13 @@ load_dotenv()
 from .schemas.intent import QueryRequest
 from .schemas.dashboard import DashboardSpec
 from .schemas.payload import DataPayload
-from .graphs.insight_graph import run_insight_graph, run_insight_graph_streaming
+from .graphs.insight_graph import run_insight_graph, run_insight_graph_streaming, get_insight_graph_v2
 from .graphs.cache import get_cache_stats, invalidate_cache
 from .sql.allowlist import get_available_queries
 from .db.supabase_client import get_db_client
 from .api.v1_chat import router as v1_chat_router
 from .observability.langsmith import is_langsmith_enabled
 from .memory.checkpointer import init_checkpointer, close_checkpointer, get_checkpointer_manager
-from .graphs.insight_graph_v2 import get_insight_graph_v2
 
 
 @asynccontextmanager

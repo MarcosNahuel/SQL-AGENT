@@ -231,6 +231,23 @@ QUERY_ALLOWLIST: Dict[str, Dict[str, Any]] = {
 
     # ============== STOCK DASHBOARD (v_stock_dashboard) ==============
 
+    "kpi_inventory_summary": {
+        "description": "KPIs de inventario: productos criticos, en alerta y totales",
+        "output_type": "kpi",
+        "output_ref": "kpi.inventory",
+        "template": """
+            SELECT
+                COUNT(*) FILTER (WHERE severity = 'critical') as critical_count,
+                COUNT(*) FILTER (WHERE severity = 'warning') as warning_count,
+                COUNT(*) FILTER (WHERE severity = 'ok') as ok_count,
+                COUNT(*) as total_products,
+                ROUND(AVG(days_cover)::numeric, 1) as avg_days_cover
+            FROM v_stock_dashboard
+        """,
+        "required_params": [],
+        "default_params": {}
+    },
+
     "stock_alerts": {
         "description": "Alertas de stock critico y productos a reponer",
         "output_type": "table",

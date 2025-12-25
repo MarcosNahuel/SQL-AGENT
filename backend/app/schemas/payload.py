@@ -35,6 +35,13 @@ class KPIData(BaseModel):
     pending: Optional[int] = Field(None, description="Consultas pendientes")
     answer_rate: Optional[float] = Field(None, description="Tasa de respuesta %")
 
+    # Inventario
+    critical_count: Optional[int] = Field(None, description="Productos en estado critico")
+    warning_count: Optional[int] = Field(None, description="Productos en alerta")
+    ok_count: Optional[int] = Field(None, description="Productos con stock ok")
+    total_products: Optional[int] = Field(None, description="Total productos")
+    avg_days_cover: Optional[float] = Field(None, description="Promedio dias de cobertura")
+
     class Config:
         extra = "allow"  # Permite campos adicionales
         json_schema_extra = {

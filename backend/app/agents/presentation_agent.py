@@ -28,6 +28,7 @@ from ..schemas.dashboard import (
     NarrativeConfig,
     ComparisonChartConfig
 )
+from ..schemas.intent import NarrativeOutput
 from ..prompts.ultrathink import get_narrative_prompt
 
 
@@ -79,7 +80,12 @@ def retry_with_backoff(max_retries: int = 3, base_delay: float = 2.0, max_delay:
 
 
 class PresentationAgent:
-    """Agente que genera la especificacion del dashboard"""
+    """
+    Agente que genera la especificacion del dashboard.
+
+    Usa .with_structured_output() para garantizar JSON válido
+    sin necesidad de parsers manuales (LangGraph 2025 standard).
+    """
 
     def __init__(self):
         # Determinar si usar OpenRouter como primario
@@ -103,10 +109,49 @@ class PresentationAgent:
 
         # LLM Gemini (fallback si OpenRouter es primario)
         self.llm_gemini = ChatGoogleGenerativeAI(
-            model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash-thinking-exp"),
+            model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
             google_api_key=os.getenv("GEMINI_API_KEY"),
             temperature=0.7
         )
+
+        # LLM con structured output para narrativa (2025 standard)
+        self._structured_llm = None
+
+    def _get_structured_llm(self):
+        """
+        Obtiene LLM configurado con .with_structured_output(NarrativeOutput).
+        Esto garantiza JSON válido sin parsers manuales (2025 standard).
+        """
+        if self._structured_llm is None:
+            base_llm = self.llm_openrouter if (self.use_openrouter_primary and self.llm_openrouter) else self.llm_gemini
+            self._structured_llm = base_llm.with_structured_output(NarrativeOutput)
+        return self._structured_llm
+
+    def _invoke_structured(self, messages: list) -> NarrativeOutput:
+        """
+        Invoca el LLM con structured output para obtener NarrativeOutput directamente.
+        Garantiza JSON válido sin parsers manuales (2025 standard).
+        """
+        structured_llm = self._get_structured_llm()
+
+        if self.use_openrouter_primary and self.llm_openrouter:
+            print(f"[PresentationAgent] Usando structured output (OpenRouter)...")
+            try:
+                return structured_llm.invoke(messages)
+            except Exception as e:
+                print(f"[PresentationAgent] Structured output error, fallback to Gemini: {e}")
+                fallback_llm = self.llm_gemini.with_structured_output(NarrativeOutput)
+                return fallback_llm.invoke(messages)
+
+        try:
+            return structured_llm.invoke(messages)
+        except Exception as e:
+            error_str = str(e)
+            if self.llm_openrouter and ("429" in error_str or "RESOURCE_EXHAUSTED" in error_str):
+                print(f"[PresentationAgent] Gemini rate limit, switching to OpenRouter structured...")
+                fallback_llm = self.llm_openrouter.with_structured_output(NarrativeOutput)
+                return fallback_llm.invoke(messages)
+            raise e
 
     def _invoke_llm(self, messages: list) -> str:
         """Invoca el LLM - OpenRouter primario si esta configurado"""
@@ -644,8 +689,8 @@ class PresentationAgent:
 
     def generate_narrative(self, question: str, payload: DataPayload) -> tuple[List[NarrativeConfig], str]:
         """
-        Usa el LLM para generar narrativa/insights basados en los datos.
-        En DEMO_MODE retorna narrativas estaticas.
+        Usa el LLM con .with_structured_output() para generar narrativa.
+        Garantiza JSON válido sin parsers manuales (2025 standard).
 
         Returns:
             Tuple de (narrativas, conclusion) para evitar estado compartido.
@@ -692,86 +737,68 @@ class PresentationAgent:
                     data_summary.append(f"Top {top.ranking_name}: #1 es '{top_item.title}' "
                                       f"con ${top_item.value:,.2f}")
 
-        # Usar prompt UltraThink mejorado
-        system_prompt = get_narrative_prompt()
+        # Prompt simplificado - structured output maneja el formato
+        system_prompt = """Eres un analista de datos experto en e-commerce para MercadoLibre Argentina.
+Genera insights profesionales basados en los datos proporcionados.
+
+Tu respuesta debe incluir:
+- conclusion: Respuesta directa y concisa a la pregunta (1-2 oraciones)
+- summary: Resumen ejecutivo del análisis (2-3 oraciones)
+- insights: Lista de 2-4 insights analíticos accionables
+- recommendation: Una recomendación accionable basada en los datos"""
 
         user_msg = f"""Pregunta del usuario: "{question}"
 
 Datos disponibles:
 {chr(10).join(data_summary)}
 
-Genera insights basados en estos datos."""
+Genera el análisis."""
 
         try:
-            # Usar metodo con retry para manejar rate limits
-            raw_content = self._invoke_llm([
+            # Usar structured output - garantiza NarrativeOutput válido sin parsing manual
+            output: NarrativeOutput = self._invoke_structured([
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_msg)
             ])
 
-            # Extraer contenido del response
-            if isinstance(raw_content, list):
-                content = ""
-                for part in raw_content:
-                    if isinstance(part, dict) and "text" in part:
-                        content = part["text"]
-                        break
-                    elif hasattr(part, "text"):
-                        content = part.text
-                        break
-                    else:
-                        content = str(part)
-            elif isinstance(raw_content, dict) and "text" in raw_content:
-                content = raw_content["text"]
-            else:
-                content = str(raw_content)
-
-            # Usar parser robusto
-            narrative_data = self._parse_json_robust(content)
-
-            if not narrative_data:
-                raise ValueError("JSON parse failed")
+            print(f"[PresentationAgent] Narrativa generada (structured output)")
 
             narratives = []
 
             # Conclusion directa (respuesta a la pregunta) - PRIMERO
-            if narrative_data.get("conclusion"):
+            if output.conclusion:
                 narratives.append(NarrativeConfig(
                     type="headline",
-                    text=narrative_data["conclusion"]
+                    text=output.conclusion
                 ))
 
             # Summary ejecutivo
-            if narrative_data.get("summary"):
+            if output.summary:
                 narratives.append(NarrativeConfig(
                     type="summary",
-                    text=narrative_data["summary"]
+                    text=output.summary
                 ))
 
             # Insights detallados
-            for insight in narrative_data.get("insights", []):
+            for insight in output.insights:
                 narratives.append(NarrativeConfig(
                     type="insight",
                     text=insight
                 ))
 
             # Recomendacion accionable
-            if narrative_data.get("recommendation"):
+            if output.recommendation:
                 narratives.append(NarrativeConfig(
                     type="callout",
-                    text=f"💡 {narrative_data['recommendation']}"
+                    text=f"💡 {output.recommendation}"
                 ))
 
-            # Retornar tupla (narrativas, conclusion) - evita race condition
-            conclusion = narrative_data.get("conclusion", "")
-            return narratives, conclusion
+            return narratives, output.conclusion
 
         except Exception as e:
-            print(f"Error generando narrativa con LLM: {e}")
-            print(f"[PresentationAgent] Usando smart narrative como fallback...")
+            print(f"[PresentationAgent] Structured output error, using fallback: {e}")
             # Usar analisis inteligente sin LLM como fallback
             narratives = self._generate_smart_narrative(payload)
-            # Generar conclusion basada en datos
             conclusion = self._generate_quick_conclusion(question, payload)
             return narratives, conclusion
 

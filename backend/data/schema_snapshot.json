@@ -1,112 +1,224 @@
 {
-  "version": "1.0.0",
-  "generated_at": "2025-12-24T15:00:00Z",
+  "version": "2.0.0",
+  "generated_at": "2025-12-25T13:31:39.492745Z",
+  "source": "refresh_schema.py",
   "tables": {
     "orders": {
       "description": "Ordenes de MercadoLibre - tabla principal de ventas",
       "columns": {
-        "id": "bigint PK - ID del pack/orden",
-        "status": "varchar - Estado: paid, cancelled, etc",
-        "date_created": "timestamptz - Fecha de creacion",
-        "total_amount": "numeric - Monto total de la orden",
-        "paid_amount": "numeric - Monto pagado",
-        "currency_id": "varchar - Moneda (ARS, USD)",
-        "buyer_id": "bigint FK - ID del comprador",
-        "shipping_id": "bigint - ID de envio"
+        "id": "bigint",
+        "buyer_id": "bigint",
+        "order_ids": "unknown",
+        "status": "text",
+        "total_amount": "numeric",
+        "currency": "text",
+        "date_created": "unknown",
+        "date_closed": "unknown",
+        "shipping_id": "unknown",
+        "shipping_status": "text",
+        "shipping_logistic_type": "unknown",
+        "date_delivered": "unknown",
+        "has_mediation": "boolean",
+        "has_fiscal_document": "boolean",
+        "fiscal_document_count": "bigint",
+        "created_at": "text",
+        "updated_at": "text"
       },
-      "key_queries": ["ventas", "ordenes", "facturacion", "ingresos"]
+      "key_queries": [
+        "ventas",
+        "ordenes",
+        "facturacion",
+        "ingresos",
+        "pedidos"
+      ]
     },
     "order_items": {
       "description": "Items de cada orden - detalle de productos vendidos",
-      "columns": {
-        "id": "bigint PK",
-        "order_id": "bigint FK -> orders.id",
-        "item_id": "varchar - SKU de MercadoLibre",
-        "title": "varchar - Nombre del producto",
-        "quantity": "int - Cantidad vendida",
-        "unit_price": "numeric - Precio unitario",
-        "full_unit_price": "numeric - Precio sin descuento"
-      },
-      "key_queries": ["productos vendidos", "items", "unidades"]
-    },
-    "products": {
-      "description": "Catalogo de productos con stock",
-      "columns": {
-        "id": "varchar PK - SKU MercadoLibre (MLA...)",
-        "title": "varchar - Nombre del producto",
-        "price": "numeric - Precio actual",
-        "available_quantity": "int - Stock disponible",
-        "sold_quantity": "int - Total vendidos historico",
-        "status": "varchar - active, paused, closed",
-        "category_id": "varchar - Categoria ML"
-      },
-      "key_queries": ["inventario", "stock", "productos", "catalogo"]
+      "columns": {},
+      "key_queries": [
+        "productos vendidos",
+        "items",
+        "unidades",
+        "detalle"
+      ]
     },
     "buyers": {
-      "description": "Compradores/clientes",
+      "description": "Compradores/clientes de MercadoLibre",
       "columns": {
-        "id": "bigint PK - ID de MercadoLibre",
-        "nickname": "varchar - Usuario ML",
-        "first_name": "varchar",
-        "last_name": "varchar",
-        "email": "varchar",
-        "city": "varchar",
-        "state": "varchar"
+        "id": "bigint",
+        "nickname": "text",
+        "first_name": "text",
+        "last_name": "text",
+        "email": "text",
+        "doc_type": "unknown",
+        "doc_number": "unknown",
+        "taxpayer_type": "unknown",
+        "can_receive_factura_a": "boolean",
+        "city": "unknown",
+        "state": "unknown",
+        "country": "text",
+        "created_at": "text",
+        "updated_at": "text"
       },
-      "key_queries": ["clientes", "compradores", "usuarios"]
+      "key_queries": [
+        "clientes",
+        "compradores",
+        "usuarios"
+      ]
     },
     "agent_interactions": {
       "description": "Interacciones del agente AI con compradores",
       "columns": {
-        "id": "uuid PK",
-        "buyer_id": "text - ID comprador",
-        "message_original": "text - Mensaje del cliente",
-        "ai_response": "text - Respuesta generada",
-        "case_type": "text - Tipo de caso",
-        "was_escalated": "boolean - Si fue escalado",
-        "source": "text - postventa/preventa",
-        "created_at": "timestamptz"
+        "id": "text",
+        "buyer_id": "text",
+        "buyer_nickname": "text",
+        "buyer_name": "unknown",
+        "pack_id": "text",
+        "order_id": "text",
+        "message_original": "text",
+        "ai_response": "text",
+        "case_type": "text",
+        "was_escalated": "boolean",
+        "escalation_reason": "unknown",
+        "source": "text",
+        "was_sent_to_ml": "boolean",
+        "ml_response_status": "unknown",
+        "n8n_execution_id": "unknown",
+        "workflow_id": "text",
+        "created_at": "text",
+        "product_id": "unknown",
+        "product_title": "unknown",
+        "product_sku": "unknown",
+        "product_price": "unknown",
+        "envio_status": "unknown",
+        "order_total_amount": "unknown"
       },
-      "key_queries": ["interacciones", "agente AI", "mensajes", "casos"]
+      "key_queries": [
+        "interacciones",
+        "agente AI",
+        "mensajes",
+        "casos"
+      ]
     },
     "escalations": {
-      "description": "Casos escalados a humanos",
+      "description": "Casos escalados a humanos para revisión",
       "columns": {
-        "id": "uuid PK",
+        "id": "text",
         "buyer_id": "text",
+        "buyer_nickname": "text",
+        "buyer_name": "text",
+        "pack_id": "text",
+        "order_id": "text",
         "message_original": "text",
-        "reason": "text - Razon del escalado",
-        "status": "text - pending, resolved",
-        "priority": "int - 1-10",
-        "human_response": "text",
-        "created_at": "timestamptz"
+        "reason": "text",
+        "case_type": "text",
+        "source": "text",
+        "status": "text",
+        "priority": "bigint",
+        "assigned_to": "unknown",
+        "human_response": "unknown",
+        "resolved_at": "unknown",
+        "resolution_notes": "unknown",
+        "n8n_execution_id": "unknown",
+        "workflow_id": "unknown",
+        "created_at": "text",
+        "updated_at": "text"
       },
-      "key_queries": ["escalados", "escalaciones", "soporte"]
+      "key_queries": [
+        "escalados",
+        "escalaciones",
+        "soporte",
+        "pendientes"
+      ]
     },
     "conversations": {
-      "description": "Hilos de conversacion",
+      "description": "Hilos de conversación con clientes",
       "columns": {
-        "id": "uuid PK",
-        "pack_id": "bigint FK -> orders.id",
-        "buyer_id": "bigint FK -> buyers.id",
-        "status": "enum - pending, active, resolved",
-        "case_type": "enum - consulta, queja, reclamo",
-        "ai_confidence": "numeric - Confianza del AI",
-        "requires_human": "boolean"
+        "id": "text",
+        "pack_id": "bigint",
+        "buyer_id": "bigint",
+        "resource_id": "unknown",
+        "status": "text",
+        "case_type": "text",
+        "priority": "bigint",
+        "assigned_to": "unknown",
+        "ai_confidence": "unknown",
+        "requires_human": "boolean",
+        "first_message_at": "text",
+        "last_message_at": "text",
+        "resolved_at": "text",
+        "resolution_time_seconds": "bigint",
+        "created_at": "text",
+        "updated_at": "text",
+        "source": "text"
       },
-      "key_queries": ["conversaciones", "chats", "hilos"]
+      "key_queries": [
+        "conversaciones",
+        "chats",
+        "hilos"
+      ]
+    },
+    "ml_items": {
+      "description": "Productos de MercadoLibre (items)",
+      "columns": {
+        "item_id": "text",
+        "title": "text",
+        "permalink": "text",
+        "thumbnail": "text",
+        "price": "bigint",
+        "available_quantity": "bigint",
+        "status": "text",
+        "sku": "text",
+        "category_id": "text",
+        "seller_id": "text",
+        "created_at": "text",
+        "updated_at": "text",
+        "total_sold": "bigint",
+        "last_synced": "text"
+      },
+      "key_queries": [
+        "productos ML",
+        "publicaciones"
+      ]
+    },
+    "ml_orders": {
+      "description": "Ordenes de MercadoLibre (packs)",
+      "columns": {
+        "id": "text",
+        "order_id": "bigint",
+        "pack_id": "unknown",
+        "buyer_id": "bigint",
+        "buyer_nickname": "text",
+        "item_id": "text",
+        "item_title": "text",
+        "item_sku": "text",
+        "quantity": "bigint",
+        "unit_price": "numeric",
+        "total_amount": "numeric",
+        "shipping_id": "bigint",
+        "shipping_status": "unknown",
+        "shipping_type": "unknown",
+        "date_shipped": "unknown",
+        "date_delivered": "unknown",
+        "status": "text",
+        "date_created": "text",
+        "date_closed": "text",
+        "raw_data": "unknown",
+        "synced_at": "text",
+        "created_at": "text",
+        "updated_at": "text"
+      },
+      "key_queries": [
+        "ordenes ML",
+        "packs"
+      ]
     }
   },
-  "relationships": [
-    {"from": "orders.buyer_id", "to": "buyers.id", "type": "many-to-one"},
-    {"from": "order_items.order_id", "to": "orders.id", "type": "many-to-one"},
-    {"from": "conversations.pack_id", "to": "orders.id", "type": "one-to-one"},
-    {"from": "conversations.buyer_id", "to": "buyers.id", "type": "many-to-one"}
-  ],
+  "relationships": [],
   "common_queries": {
     "ventas_totales": "SELECT SUM(total_amount) FROM orders WHERE status = 'paid'",
-    "productos_vendidos": "SELECT oi.title, SUM(oi.quantity) FROM order_items oi JOIN orders o ON oi.order_id = o.id WHERE o.status = 'paid' GROUP BY oi.title",
+    "productos_vendidos": "SELECT oi.title, SUM(oi.quantity) as total FROM order_items oi JOIN orders o ON oi.order_id = o.id WHERE o.status = 'paid' GROUP BY oi.title ORDER BY total DESC",
     "stock_bajo": "SELECT id, title, available_quantity FROM products WHERE available_quantity < 10 AND status = 'active'",
-    "tasa_escalado": "SELECT COUNT(*) FILTER (WHERE was_escalated) * 100.0 / COUNT(*) FROM agent_interactions"
+    "tasa_escalado": "SELECT COUNT(*) FILTER (WHERE was_escalated) * 100.0 / NULLIF(COUNT(*), 0) FROM agent_interactions"
   }
 }

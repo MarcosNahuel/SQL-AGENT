@@ -41,7 +41,6 @@ from ..schemas.payload import (
 from ..schemas.intent import QueryPlan
 from ..prompts.ultrathink import get_query_decision_prompt
 from ..utils.date_parser import extract_comparison_dates, is_comparison_query
-from ..utils.robust_parser import parse_json_robust, RobustJSONParser
 
 
 def retry_with_backoff(max_retries: int = 3, base_delay: float = 2.0, max_delay: float = 60.0):
@@ -72,7 +71,12 @@ def retry_with_backoff(max_retries: int = 3, base_delay: float = 2.0, max_delay:
 
 
 class DataAgent:
-    """Agente que ejecuta queries SQL de forma segura"""
+    """
+    Agente que ejecuta queries SQL de forma segura.
+
+    Usa .with_structured_output() para garantizar JSON válido
+    sin necesidad de parsers manuales (LangGraph 2025 standard).
+    """
 
     def __init__(self):
         self.db = get_db_client()
@@ -82,7 +86,7 @@ class DataAgent:
 
         # LLM Gemini (fallback si OpenRouter es primario)
         self.llm_gemini = ChatGoogleGenerativeAI(
-            model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash-thinking-exp"),
+            model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
             google_api_key=os.getenv("GEMINI_API_KEY"),
             temperature=0.1  # Baja temperatura para decisiones deterministicas
         )
@@ -102,6 +106,19 @@ class DataAgent:
             )
         else:
             self.llm_openrouter = None
+
+        # LLM con structured output para decisiones de queries (2025 standard)
+        self._structured_llm = None
+
+    def _get_structured_llm(self):
+        """
+        Obtiene LLM configurado con .with_structured_output(QueryPlan).
+        Esto garantiza JSON válido sin parsers manuales (2025 standard).
+        """
+        if self._structured_llm is None:
+            base_llm = self.llm_openrouter if (self.use_openrouter_primary and self.llm_openrouter) else self.llm_gemini
+            self._structured_llm = base_llm.with_structured_output(QueryPlan)
+        return self._structured_llm
 
     def _invoke_llm(self, messages: list):
         """Invoca el LLM con OpenRouter como primario si USE_OPENROUTER_PRIMARY=true"""
@@ -124,16 +141,32 @@ class DataAgent:
                 return self.llm_openrouter.invoke(messages)
             raise e
 
-    def _parse_json_robust(self, content: str) -> dict:
+    def _invoke_structured(self, messages: list) -> QueryPlan:
         """
-        Parser JSON robusto para respuestas LLM.
-        Usa el RobustJSONParser centralizado con soporte para auto-corrección.
+        Invoca el LLM con structured output para obtener QueryPlan directamente.
+        Garantiza JSON válido sin parsers manuales (2025 standard).
+        """
+        structured_llm = self._get_structured_llm()
 
-        Returns:
-            dict parseado o {} si falla completamente
-        """
-        # Usar el parser robusto centralizado con LLM para auto-corrección
-        return parse_json_robust(content, llm=self.llm_gemini)
+        if self.use_openrouter_primary and self.llm_openrouter:
+            print(f"[DataAgent] Usando structured output (OpenRouter)...")
+            try:
+                return structured_llm.invoke(messages)
+            except Exception as e:
+                print(f"[DataAgent] Structured output error, fallback to Gemini: {e}")
+                # Fallback: usar Gemini con structured output
+                fallback_llm = self.llm_gemini.with_structured_output(QueryPlan)
+                return fallback_llm.invoke(messages)
+
+        try:
+            return structured_llm.invoke(messages)
+        except Exception as e:
+            error_str = str(e)
+            if self.llm_openrouter and ("429" in error_str or "RESOURCE_EXHAUSTED" in error_str):
+                print(f"[DataAgent] Gemini rate limit, switching to OpenRouter structured...")
+                fallback_llm = self.llm_openrouter.with_structured_output(QueryPlan)
+                return fallback_llm.invoke(messages)
+            raise e
 
     def _decide_queries_heuristic(self, question: str) -> QueryPlan:
         """
@@ -195,13 +228,13 @@ class DataAgent:
         # Inventario / Stock (sin "vendido")
         elif any(kw in q_lower for kw in ["inventario", "stock", "existencia"]):
             if any(kw in q_lower for kw in ["bajo", "alerta", "falta", "critico", "crítico"]):
-                query_ids = ["kpi_sales_summary", "stock_reorder_analysis", "ts_top_product_sales"]
+                query_ids = ["kpi_inventory_summary", "products_low_stock", "stock_alerts"]
             else:
-                query_ids = ["kpi_sales_summary", "products_inventory", "stock_reorder_analysis"]
+                query_ids = ["kpi_inventory_summary", "products_inventory", "stock_alerts"]
 
         # Productos (generico, sin "vendido")
         elif "producto" in q_lower and not any(kw in q_lower for kw in ["vendido", "venta", "revenue"]):
-            query_ids = ["kpi_sales_summary", "products_inventory", "products_low_stock"]
+            query_ids = ["kpi_inventory_summary", "products_inventory", "products_low_stock"]
 
         # Preventa
         elif any(kw in q_lower for kw in ["preventa", "consulta", "pregunta"]):
@@ -217,9 +250,8 @@ class DataAgent:
 
     def decide_queries(self, question: str, date_from: Optional[str], date_to: Optional[str]) -> QueryPlan:
         """
-        Usa el LLM para decidir que queries ejecutar basado en la pregunta.
-        El LLM SOLO puede elegir de la lista de queries disponibles.
-        LLM-based reasoning con heuristics como fallback.
+        Usa el LLM con .with_structured_output() para decidir queries.
+        Garantiza JSON válido sin parsers manuales (2025 standard).
         """
         # Usar heuristics como fallback rapido si LLM deshabilitado
         use_llm = os.getenv("DATA_AGENT_USE_LLM", "true").lower() == "true"
@@ -228,13 +260,12 @@ class DataAgent:
             print(f"[DataAgent] LLM disabled, usando heuristicas para: {question[:50]}", file=sys.stderr, flush=True)
             return self._decide_queries_heuristic(question)
 
-        print(f"[DataAgent] LLM reasoning para: {question[:50]}", file=sys.stderr, flush=True)
-        demo_mode = os.getenv("DEMO_MODE", "false").strip().lower()
+        print(f"[DataAgent] LLM structured output para: {question[:50]}", file=sys.stderr, flush=True)
 
         available = get_available_queries()
         queries_list = "\n".join([f"- {qid}: {desc}" for qid, desc in available.items()])
 
-        system_prompt = f"""Eres un experto en analisis de datos de e-commerce para MercadoLibre Argentina.
+        system_prompt = f"""Eres un experto en análisis de datos de e-commerce para MercadoLibre Argentina.
 
 {BUSINESS_CONTEXT}
 
@@ -245,108 +276,52 @@ class DataAgent:
 
 ### Tabla ml_orders (Ventas)
 - SIEMPRE filtrar por status='paid' para ventas reales
-- total_amount = monto final pagado (usar para reportes de ventas)
-- date_created = fecha de la orden (usar para filtros temporales)
-- shipping_type: fulfillment (Full), cross_docking (ME), drop_off, self_service
+- total_amount = monto final pagado
+- date_created = fecha de la orden
 
 ### Tabla ml_items (Productos)
-- price * total_sold = revenue estimado del producto
-- available_quantity < 10 = stock critico
+- available_quantity < 10 = stock crítico
 - status='active' para productos activos
 
 ### Tablas de AI (agent_interactions, escalations)
 - was_escalated=true indica casos que requirieron humano
-- case_type clasifica: envio, producto, devolucion, garantia, reclamo
-- source: 'preventa' (antes de comprar) o 'postventa' (despues)
 
-## REGLAS DE SELECCION
-1. SOLO responde con JSON valido (sin markdown)
-2. SOLO usa query_ids de la lista de arriba
-3. Elige las queries MAS RELEVANTES (max 3)
-4. Para ventas: SIEMPRE incluir kpi_sales_summary
+## REGLAS DE SELECCIÓN
+1. SOLO usa query_ids de la lista de arriba
+2. Elige las queries MÁS RELEVANTES (máx 3)
+3. Para ventas: SIEMPRE incluir kpi_sales_summary
+4. Para inventario: SIEMPRE incluir kpi_inventory_summary
 
-## GUIA RAPIDA:
-- Ventas/facturacion: kpi_sales_summary, ts_sales_by_day, top_products_by_revenue
-- Stock/inventario: products_inventory, products_low_stock, stock_alerts
-- Reposicion/quiebre stock: stock_reorder_analysis, ts_top_product_sales, kpi_sales_summary
+## GUÍA RÁPIDA:
+- Ventas/facturación: kpi_sales_summary, ts_sales_by_day, top_products_by_revenue
+- Stock/inventario: kpi_inventory_summary, products_low_stock, stock_alerts
 - Agente AI/bot: ai_interactions_summary, recent_ai_interactions, escalated_cases
-- Escalados/pendientes: escalated_cases, interactions_by_case_type
-- Preventa: preventa_summary, recent_preventa_queries
-
-## IMPORTANTE PARA GRAFICOS:
-- Siempre incluir al menos una query de time_series (ts_*) para graficos de linea
-- Siempre incluir al menos una query de top_items (top.*) para graficos de barras
-- Esto asegura que el dashboard muestre 2 graficos distintos
-
-FORMATO JSON (sin markdown):
-{{"query_ids": ["query_id1", "query_id2"], "params": {{"limit": 10}}}}
 """
 
         user_msg = f"""Pregunta del usuario: "{question}"
-Rango de fechas: {date_from or 'ultimos 30 dias'} a {date_to or 'hoy'}
+Rango de fechas: {date_from or 'últimos 30 días'} a {date_to or 'hoy'}
 
-Responde SOLO con el JSON de queries a ejecutar."""
+Selecciona las queries a ejecutar."""
 
         try:
-            # Usar metodo con retry para manejar rate limits
-            response = self._invoke_llm([
+            # Usar structured output - garantiza QueryPlan válido sin parsing manual
+            plan: QueryPlan = self._invoke_structured([
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_msg)
             ])
-        except Exception as llm_error:
-            print(f"[DataAgent] LLM error, fallback to heuristics: {llm_error}")
-            return self._decide_queries_heuristic(question)
 
-        # Parsear respuesta usando el helper robusto
-        try:
-            # Extraer contenido del response
-            raw_content = response.content
-            print(f"[DataAgent] Raw content type: {type(raw_content)}")
-
-            # Si es lista, buscar el primer elemento con 'text'
-            if isinstance(raw_content, list):
-                content = ""
-                for part in raw_content:
-                    if isinstance(part, dict) and "text" in part:
-                        content = part["text"]
-                        break
-                    elif hasattr(part, "text"):
-                        content = part.text
-                        break
-                    else:
-                        content = str(part)
-            elif isinstance(raw_content, dict) and "text" in raw_content:
-                content = raw_content["text"]
-            elif hasattr(raw_content, "text"):
-                content = raw_content.text
-            else:
-                content = str(raw_content)
-
-            print(f"[DataAgent] Extracted content: {content[:200] if content else 'None'}")
-
-            # Usar parser robusto
-            plan_data = self._parse_json_robust(content)
-
-            if not plan_data:
-                print("[DataAgent] JSON parse failed, using heuristics fallback")
-                return self._decide_queries_heuristic(question)
-
-            # Validar que todas las queries existen
-            valid_ids = [qid for qid in plan_data.get("query_ids", []) if validate_query_id(qid)]
-
-            print(f"[DataAgent] Queries validas encontradas: {valid_ids}")
+            # Validar que todas las queries existen en el allowlist
+            valid_ids = [qid for qid in plan.query_ids if validate_query_id(qid)]
+            print(f"[DataAgent] Queries válidas (structured output): {valid_ids}")
 
             if not valid_ids:
                 # Fallback a queries default
                 valid_ids = ["kpi_sales_summary", "ts_sales_by_day"]
 
-            return QueryPlan(
-                query_ids=valid_ids,
-                params=plan_data.get("params", {})
-            )
+            return QueryPlan(query_ids=valid_ids, params=plan.params)
+
         except Exception as e:
-            print(f"[DataAgent] Error parseando respuesta LLM: {e}")
-            # Fallback seguro a heuristics
+            print(f"[DataAgent] Structured output error, fallback to heuristics: {e}")
             return self._decide_queries_heuristic(question)
 
     def execute_plan(self, plan: QueryPlan, date_from: Optional[str] = None, date_to: Optional[str] = None) -> DataPayload:

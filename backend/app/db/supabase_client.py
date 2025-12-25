@@ -212,6 +212,8 @@ class SupabaseRESTClient:
             rows = self._execute_recent_preventa_queries(safe_params)
         elif query_id == "stock_alerts":
             rows = self._execute_stock_alerts(safe_params)
+        elif query_id == "kpi_inventory_summary":
+            rows = self._execute_kpi_inventory_summary(safe_params)
         else:
             raise ValueError(f"Query '{query_id}' no implementada para REST API")
 
@@ -779,6 +781,61 @@ class SupabaseRESTClient:
             }
             for item in items
         ]
+
+    def _execute_kpi_inventory_summary(self, params: Dict) -> List[Dict]:
+        """KPIs de inventario - resumen de estado de stock"""
+        try:
+            # Obtener todos los items del dashboard de stock
+            items = self._get_table(
+                "v_stock_dashboard",
+                select="severity,days_cover",
+                limit=1000
+            )
+
+            if not items:
+                return [{
+                    "critical_count": 0,
+                    "warning_count": 0,
+                    "ok_count": 0,
+                    "total_products": 0,
+                    "avg_days_cover": 0
+                }]
+
+            critical = sum(1 for item in items if item.get("severity") == "critical")
+            warning = sum(1 for item in items if item.get("severity") == "warning")
+            ok = sum(1 for item in items if item.get("severity") == "ok")
+            total = len(items)
+
+            days_covers = [item.get("days_cover") for item in items if item.get("days_cover") is not None]
+            avg_days = round(sum(days_covers) / len(days_covers), 1) if days_covers else 0
+
+            return [{
+                "critical_count": critical,
+                "warning_count": warning,
+                "ok_count": ok,
+                "total_products": total,
+                "avg_days_cover": avg_days
+            }]
+        except Exception as e:
+            print(f"[_execute_kpi_inventory_summary] Error: {e}")
+            # Fallback: contar desde ml_items
+            items = self._get_table(
+                "ml_items",
+                select="item_id,available_quantity",
+                filters={"status": "eq.active"},
+                limit=1000
+            )
+            critical = sum(1 for item in items if int(item.get("available_quantity", 0) or 0) < 5)
+            warning = sum(1 for item in items if 5 <= int(item.get("available_quantity", 0) or 0) < 10)
+            ok = sum(1 for item in items if int(item.get("available_quantity", 0) or 0) >= 10)
+
+            return [{
+                "critical_count": critical,
+                "warning_count": warning,
+                "ok_count": ok,
+                "total_products": len(items),
+                "avg_days_cover": 0
+            }]
 
     def test_connection(self) -> bool:
         """Prueba la conexion a Supabase REST API"""

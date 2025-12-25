@@ -31,17 +31,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..schemas.intent import QueryRequest
-from ..graphs.insight_graph import run_insight_graph_streaming
+from ..graphs.insight_graph import run_insight_graph_streaming, run_insight_graph_v2_streaming
 from ..utils.date_parser import extract_date_range, format_date_context
 from ..memory.chat_memory import get_chat_memory
 
-# Import v2 graph if available
-try:
-    from ..graphs.insight_graph_v2 import run_insight_graph_v2_streaming
-    V2_AVAILABLE = True
-except ImportError:
-    V2_AVAILABLE = False
-    print("[v1_chat] Warning: Graph v2 not available")
+# V2 is now the default (consolidated into insight_graph.py)
+V2_AVAILABLE = True
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 

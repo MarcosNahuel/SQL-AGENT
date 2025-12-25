@@ -1,30 +1,56 @@
 """
-Insight Graph - Orquestacion LangGraph con Router Inteligente
+Insight Graph v2 - Arquitectura Router-as-CEO (LangGraph 2025)
 
-Flujo:
-1. IntentRouter -> Clasifica y decide que agentes invocar
-2. DataAgent -> Ejecuta queries SQL (si necesario)
-3. PresentationAgent -> Genera DashboardSpec + Narrativa (si necesario)
-4. DirectResponse -> Responde sin agentes (conversacional/clarificacion)
+Implementa el patrón Router-as-CEO de LangGraph v0.2+ con:
+- Router que decide Y ejecuta navegación con Command objects
+- DataAgent con .with_structured_output() para queries
+- PresentationAgent con .with_structured_output() para narrativa
+- Ciclo de Reflexión para autocorrección de errores
+- Grafo simplificado: Router → Workers → END
 """
-from typing import TypedDict, Optional, Any, Literal
+import os
+import sys
+import uuid
+import json
+import asyncio
+from typing import TypedDict, Optional, List, Literal, Any, Annotated
 from datetime import datetime
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, END, START
+from langgraph.types import Command
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, AnyMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.graph.message import add_messages
 
-from ..memory.checkpointer import get_checkpointer_manager
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
+
+from ..agents.intent_router import IntentRouter, RoutingDecision, ResponseType, get_intent_router
 from ..agents.data_agent import DataAgent
 from ..agents.presentation_agent import PresentationAgent
-from ..agents.intent_router import IntentRouter, RoutingDecision, ResponseType, get_intent_router
 from ..schemas.intent import QueryRequest
 from ..schemas.payload import DataPayload
 from ..schemas.dashboard import DashboardSpec, SlotConfig, NarrativeConfig, KpiCardConfig, ChartConfig
-from .cache import cached_node, get_cache_stats, invalidate_cache
-from ..observability.langsmith import traced, get_langsmith_callback, is_langsmith_enabled
+from ..schemas.agent_state import (
+    InsightStateV2,
+    SQLOutput,
+    SQLReflection,
+    SupervisorDecision,
+    ExecutionStatus,
+    SQLExecutionResult,
+    create_initial_state
+)
+from ..utils.sql_validator import validate_sql_ast, SQLRiskLevel
+from ..observability.langsmith import traced
+from ..sql.allowlist import get_available_queries, QUERY_ALLOWLIST
+from ..sql.schema_docs import BUSINESS_CONTEXT, SCHEMA_CONTEXT
+from ..memory.checkpointer import get_checkpointer_manager
+from .cache import get_cache_stats, invalidate_cache
 
 
-def build_visual_slots(payload: DataPayload) -> SlotConfig:
+# ============== Utility Functions ==============
+
+def build_visual_slots(payload) -> SlotConfig:
     """
     Genera configuraciones visuales (KPIs, Charts) basadas en el DataPayload.
     Usado en flujo DATA_ONLY para renderizar dashboards sin LLM.
@@ -41,6 +67,11 @@ def build_visual_slots(payload: DataPayload) -> SlotConfig:
             ("Interacciones", "kpi.total_interactions", "number"),
             ("Escalados", "kpi.escalated_count", "number"),
             ("Tasa Escalado", "kpi.escalation_rate", "percent"),
+            # Inventario
+            ("Productos Críticos", "kpi.critical_count", "number"),
+            ("Productos Alerta", "kpi.warning_count", "number"),
+            ("Stock OK", "kpi.ok_count", "number"),
+            ("Total Productos", "kpi.total_products", "number"),
         ]
         for label, ref, fmt in kpi_mappings:
             if ref in payload.available_refs:
@@ -79,365 +110,10 @@ def build_visual_slots(payload: DataPayload) -> SlotConfig:
     return slots
 
 
-class InsightState(TypedDict):
-    """Estado del grafo de insights"""
-    # Input
-    question: str
-    date_from: Optional[str]
-    date_to: Optional[str]
-    filters: Optional[dict]
-
-    # Routing
-    routing_decision: Optional[RoutingDecision]
-
-    # Intermediate
-    data_payload: Optional[DataPayload]
-
-    # Output
-    dashboard_spec: Optional[DashboardSpec]
-    direct_response: Optional[str]  # Para respuestas conversacionales
-
-    # Metadata
-    error: Optional[str]
-    trace_id: Optional[str]
-    started_at: Optional[str]
-    completed_at: Optional[str]
-
-
-# Inicializar agentes (singleton para reutilizar)
-_data_agent: Optional[DataAgent] = None
-_presentation_agent: Optional[PresentationAgent] = None
-
-
-def get_data_agent() -> DataAgent:
-    global _data_agent
-    if _data_agent is None:
-        _data_agent = DataAgent()
-    return _data_agent
-
-
-def get_presentation_agent() -> PresentationAgent:
-    global _presentation_agent
-    if _presentation_agent is None:
-        _presentation_agent = PresentationAgent()
-    return _presentation_agent
-
-
-# ============== NODOS DEL GRAFO ==============
-
-@traced("Router")
-def run_router_node(state: InsightState) -> InsightState:
-    """Nodo que ejecuta el IntentRouter para decidir flujo"""
-    try:
-        router = get_intent_router()
-        decision = router.route(state["question"])
-        state["routing_decision"] = decision
-        print(f"[Graph] Router decision: {decision.response_type.value} "
-              f"(SQL={decision.needs_sql}, Dashboard={decision.needs_dashboard})")
-    except Exception as e:
-        # Si falla el router, asumir dashboard completo
-        print(f"[Graph] Router error, defaulting to dashboard: {e}")
-        state["routing_decision"] = RoutingDecision(
-            response_type=ResponseType.DASHBOARD,
-            needs_sql=True,
-            needs_dashboard=True,
-            needs_narrative=True,
-            confidence=0.5,
-            reasoning="Router fallback due to error"
-        )
-    return state
-
-
-@traced("DirectResponse")
-def run_direct_response_node(state: InsightState) -> InsightState:
-    """Nodo para respuestas directas (sin SQL ni dashboard)"""
-    decision = state.get("routing_decision")
-    if decision and decision.direct_response:
-        state["direct_response"] = decision.direct_response
-        # Crear un DashboardSpec minimo para la UI
-        state["dashboard_spec"] = DashboardSpec(
-            title="SQL Agent",
-            subtitle="Asistente de datos",
-            conclusion=decision.direct_response,
-            slots=SlotConfig(
-                filters=[],
-                series=[],
-                charts=[],
-                narrative=[
-                    NarrativeConfig(type="summary", text=decision.direct_response)
-                ]
-            )
-        )
-        state["completed_at"] = datetime.utcnow().isoformat()
-        print(f"[Graph] Direct response: {decision.response_type.value}")
-    return state
-
-
-@traced("DataAgent")
-def run_data_agent_node(state: InsightState) -> InsightState:
-    """Nodo que ejecuta el DataAgent"""
-    try:
-        agent = get_data_agent()
-        payload = agent.run(
-            question=state["question"],
-            date_from=state.get("date_from"),
-            date_to=state.get("date_to")
-        )
-        state["data_payload"] = payload
-        print(f"[Graph] DataAgent completado: {len(payload.available_refs)} refs disponibles")
-    except Exception as e:
-        state["error"] = f"Error en DataAgent: {str(e)}"
-        print(f"[Graph] Error en DataAgent: {e}")
-    return state
-
-
-@traced("PresentationAgent")
-def run_presentation_agent_node(state: InsightState) -> InsightState:
-    """Nodo que ejecuta el PresentationAgent"""
-    if state.get("error"):
-        return state
-
-    if not state.get("data_payload"):
-        state["error"] = "No hay datos para presentar"
-        return state
-
-    try:
-        agent = get_presentation_agent()
-        spec = agent.run(
-            question=state["question"],
-            payload=state["data_payload"]
-        )
-        state["dashboard_spec"] = spec
-        state["completed_at"] = datetime.utcnow().isoformat()
-        print(f"[Graph] PresentationAgent completado: {spec.title}")
-    except Exception as e:
-        state["error"] = f"Error en PresentationAgent: {str(e)}"
-        print(f"[Graph] Error en PresentationAgent: {e}")
-
-    return state
-
-
-def route_after_router(state: InsightState) -> Literal["DirectResponse", "DataAgent"]:
-    """Decide siguiente nodo basado en routing decision"""
-    decision = state.get("routing_decision")
-
-    if not decision:
-        return "DataAgent"  # Fallback
-
-    # Si es conversacional o clarificacion, respuesta directa
-    if decision.response_type in [ResponseType.CONVERSATIONAL, ResponseType.CLARIFICATION]:
-        return "DirectResponse"
-
-    # Si necesita SQL, ir a DataAgent
-    if decision.needs_sql:
-        return "DataAgent"
-
-    return "DirectResponse"
-
-
-def route_after_data(state: InsightState) -> Literal["PresentationAgent", "__end__"]:
-    """Decide si generar dashboard o terminar"""
-    if state.get("error"):
-        return END
-
-    decision = state.get("routing_decision")
-
-    # Si necesita dashboard, ir a PresentationAgent
-    if decision and decision.needs_dashboard:
-        return "PresentationAgent"
-
-    # Si solo necesita datos (DATA_ONLY), generar respuesta simple
-    if decision and decision.response_type == ResponseType.DATA_ONLY:
-        # Generar spec simplificado sin graficos
-        if state.get("data_payload"):
-            payload = state["data_payload"]
-            kpis = payload.kpis
-
-            # Crear respuesta con KPIs en narrativa
-            summary_parts = []
-
-            if kpis:
-                if hasattr(kpis, 'total_sales') and kpis.total_sales:
-                    summary_parts.append(f"Ventas totales: ${kpis.total_sales:,.0f}")
-                if hasattr(kpis, 'total_orders') and kpis.total_orders:
-                    summary_parts.append(f"Ordenes: {kpis.total_orders:,}")
-                if hasattr(kpis, 'avg_order_value') and kpis.avg_order_value:
-                    summary_parts.append(f"Ticket promedio: ${kpis.avg_order_value:,.0f}")
-
-            # Si hay top_items, agregar resumen
-            if payload.top_items:
-                for ranking in payload.top_items:
-                    if ranking.items:
-                        top_item = ranking.items[0]
-                        summary_parts.append(f"Top {ranking.ranking_name}: {top_item.title} (${top_item.value:,.0f})")
-
-            # Si hay tablas (ej: stock alerts), agregar resumen
-            if payload.raw_data:
-                critical_items = [r for r in payload.raw_data if r.get('severity') == 'critical' or r.get('status') == 'CRITICO']
-                if critical_items:
-                    summary_parts.append(f"Alertas criticas de stock: {len(critical_items)} productos")
-
-            conclusion = ". ".join(summary_parts) if summary_parts else "Datos obtenidos exitosamente"
-
-            # Generar slots visuales basados en el payload
-            visual_slots = build_visual_slots(payload)
-            visual_slots.narrative = [NarrativeConfig(type="summary", text=conclusion)]
-
-            state["dashboard_spec"] = DashboardSpec(
-                title="Resumen de Datos",
-                subtitle=state["question"],
-                conclusion=conclusion,
-                slots=visual_slots
-            )
-            state["completed_at"] = datetime.utcnow().isoformat()
-        return END
-
-    return "PresentationAgent"
-
-
-# Construir el grafo
-def build_insight_graph(checkpointer=None):
-    """
-    Construye el grafo de LangGraph con Router Inteligente y persistencia.
-
-    Flujo:
-    [Router] --> [DirectResponse] --> END (conversacional)
-         |
-         +--> [DataAgent] --> [PresentationAgent] --> END (dashboard)
-                   |
-                   +--> END (data_only, sin graficos)
-
-    Args:
-        checkpointer: PostgresSaver o MemorySaver para persistencia de estado.
-                     Si None, usa el manager global.
-    """
-    workflow = StateGraph(InsightState)
-
-    # Agregar nodos
-    workflow.add_node("Router", run_router_node)
-    workflow.add_node("DirectResponse", run_direct_response_node)
-    workflow.add_node("DataAgent", run_data_agent_node)
-    workflow.add_node("PresentationAgent", run_presentation_agent_node)
-
-    # Entry point: Router
-    workflow.set_entry_point("Router")
-
-    # Router -> DirectResponse o DataAgent
-    workflow.add_conditional_edges(
-        "Router",
-        route_after_router,
-        {
-            "DirectResponse": "DirectResponse",
-            "DataAgent": "DataAgent"
-        }
-    )
-
-    # DirectResponse -> END
-    workflow.add_edge("DirectResponse", END)
-
-    # DataAgent -> PresentationAgent o END
-    workflow.add_conditional_edges(
-        "DataAgent",
-        route_after_data,
-        {
-            "PresentationAgent": "PresentationAgent",
-            END: END
-        }
-    )
-
-    # PresentationAgent -> END
-    workflow.add_edge("PresentationAgent", END)
-
-    # Compilar con checkpointer para persistencia
-    if checkpointer is None:
-        manager = get_checkpointer_manager()
-        checkpointer = manager.checkpointer
-
-    if checkpointer:
-        print(f"[Graph] Compilando con checkpointer: {type(checkpointer).__name__}")
-        return workflow.compile(checkpointer=checkpointer, name="InsightGraph-v2")
-    else:
-        print("[Graph] Compilando sin checkpointer (memoria no persistente)")
-        return workflow.compile(name="InsightGraph-v2")
-
-
-# Grafo compilado (singleton)
-_compiled_graph = None
-_graph_initialized = False
-
-
-def get_insight_graph(force_rebuild: bool = False):
-    """
-    Obtiene el grafo compilado con checkpointer para persistencia.
-
-    Args:
-        force_rebuild: Forzar reconstrucción del grafo
-
-    Returns:
-        Grafo compilado con o sin checkpointer
-    """
-    global _compiled_graph, _graph_initialized
-
-    if _compiled_graph is None or force_rebuild:
-        # Obtener checkpointer del manager
-        manager = get_checkpointer_manager()
-
-        # Si el manager no está inicializado, inicializar sync
-        if manager.checkpointer is None and not _graph_initialized:
-            print("[Graph] Inicializando checkpointer sync...")
-            manager.initialize_sync()
-            _graph_initialized = True
-
-        _compiled_graph = build_insight_graph(checkpointer=manager.checkpointer)
-
-    return _compiled_graph
-
-
-def rebuild_graph_with_checkpointer():
-    """
-    Reconstruye el grafo con el checkpointer actual.
-    Útil después de inicializar el checkpointer async.
-    """
-    global _compiled_graph
-    _compiled_graph = None
-    return get_insight_graph(force_rebuild=True)
-
-
-def _build_run_config(trace_id: str, thread_id: Optional[str] = None) -> RunnableConfig:
-    """
-    Construye config para invocación del grafo.
-
-    Args:
-        trace_id: ID de trazabilidad para LangSmith
-        thread_id: ID del hilo de conversación para persistencia
-
-    Returns:
-        RunnableConfig con thread_id en configurable
-    """
-    config: RunnableConfig = {
-        "run_name": f"InsightGraph-{trace_id}",
-        "tags": ["sql-agent", "insight-graph"],
-        "metadata": {
-            "trace_id": trace_id,
-            "graph_name": "InsightGraph",
-            "version": "2.0"
-        }
-    }
-
-    # Agregar thread_id para persistencia si está disponible
-    if thread_id:
-        config["configurable"] = {
-            "thread_id": thread_id,
-            "checkpoint_ns": ""  # Namespace vacío por defecto
-        }
-
-    return config
-
-
 def get_demo_data() -> DataPayload:
     """Retorna datos de demo para testing sin DB/LLM"""
     from ..schemas.payload import KPIData, TimeSeriesData, TimeSeriesPoint, TopItemsData, TopItem, DatasetMeta
-    from datetime import datetime, timedelta
+    from datetime import timedelta
     import random
 
     # Generar datos de ejemplo
@@ -486,335 +162,641 @@ def get_demo_data() -> DataPayload:
     )
 
 
-async def run_insight_graph_streaming(
-    request: QueryRequest,
-    trace_id: Optional[str] = None,
-    thread_id: Optional[str] = None
-):
+# ============== Configuración LLM ==============
+
+def get_llm(temperature: float = 0.1):
+    """Obtiene el LLM configurado con fallback."""
+    use_openrouter = os.getenv("USE_OPENROUTER_PRIMARY", "false").lower() == "true"
+
+    if use_openrouter:
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        if openrouter_key:
+            return ChatOpenAI(
+                model=os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-001"),
+                openai_api_key=openrouter_key,
+                openai_api_base="https://openrouter.ai/api/v1",
+                temperature=temperature,
+                default_headers={
+                    "HTTP-Referer": "https://sql-agent.local",
+                    "X-Title": "SQL-Agent-v2"
+                }
+            )
+
+    return ChatGoogleGenerativeAI(
+        model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp"),
+        google_api_key=os.getenv("GEMINI_API_KEY"),
+        temperature=temperature
+    )
+
+
+# ============== Estado Simplificado ==============
+
+class SupervisorState(TypedDict):
+    """Estado del grafo con Supervisor Pattern."""
+    # Input
+    question: str
+    date_from: Optional[str]
+    date_to: Optional[str]
+    filters: Optional[dict]
+
+    # Routing
+    routing_decision: Optional[RoutingDecision]
+
+    # Data Processing
+    data_payload: Optional[DataPayload]
+
+    # Reflection
+    retry_count: int
+    max_retries: int
+    last_error: Optional[str]
+
+    # Output
+    dashboard_spec: Optional[DashboardSpec]
+    direct_response: Optional[str]
+
+    # Metadata
+    trace_id: Optional[str]
+    error: Optional[str]
+    agent_steps: List[dict]
+
+
+# ============== Agentes Singleton ==============
+
+_data_agent: Optional[DataAgent] = None
+_presentation_agent: Optional[PresentationAgent] = None
+
+
+def get_data_agent() -> DataAgent:
+    global _data_agent
+    if _data_agent is None:
+        _data_agent = DataAgent()
+    return _data_agent
+
+
+def get_presentation_agent() -> PresentationAgent:
+    global _presentation_agent
+    if _presentation_agent is None:
+        _presentation_agent = PresentationAgent()
+    return _presentation_agent
+
+
+# ============== Nodos del Grafo v2 (Router-as-CEO) ==============
+
+@traced("Router")
+def router_node(state: SupervisorState) -> Command[Literal["data_agent", "direct_response", "__end__"]]:
     """
-    Version streaming del grafo que genera eventos SSE.
-    Yields eventos JSON con el progreso del analisis.
-    Usa el Router Inteligente para decidir el flujo.
+    Nodo Router como CEO - decide Y ejecuta navegación directamente.
+    Implementa el patrón Router-as-CEO de LangGraph 2025.
 
-    Args:
-        request: QueryRequest con la pregunta y filtros
-        trace_id: ID de trazabilidad para LangSmith
-        thread_id: ID del hilo de conversación para persistencia
+    Flujo:
+    - CONVERSATIONAL → direct_response
+    - DATA_ONLY/DASHBOARD → data_agent
     """
-    import uuid
-    import os
-    import json
-    import asyncio
+    step = {
+        "node": "router",
+        "timestamp": datetime.utcnow().isoformat(),
+    }
 
-    # Preparar estado inicial
-    trace = trace_id or str(uuid.uuid4())[:8]
-    thread = thread_id or str(uuid.uuid4())
+    try:
+        router = get_intent_router()
+        decision = router.route(state["question"])
+        step["response_type"] = decision.response_type.value
+        step["domain"] = decision.domain
 
-    # Log para debugging
-    print(f"[Graph Streaming] Iniciando con trace_id={trace}, thread_id={thread}")
+        print(f"[Router] Decision: {decision.response_type.value}, Domain: {decision.domain}")
 
-    # Evento: Inicio
-    yield json.dumps({
-        "event": "start",
-        "trace_id": trace,
-        "thread_id": thread,
-        "message": "🔍 Analizando tu pregunta...",
-        "step": "init",
-        "timestamp": datetime.utcnow().isoformat()
-    })
-    await asyncio.sleep(0.1)
+        # Router como CEO - decide Y navega directamente
+        if decision.response_type in [ResponseType.CONVERSATIONAL, ResponseType.CLARIFICATION]:
+            step["goto"] = "direct_response"
+            return Command(
+                goto="direct_response",
+                update={
+                    "routing_decision": decision,
+                    "agent_steps": state.get("agent_steps", []) + [step]
+                }
+            )
 
-    # Paso 1: Router - Clasificar intent
-    yield json.dumps({
-        "event": "progress",
-        "message": "🧠 Clasificando tu consulta...",
-        "step": "router",
-        "detail": f"Pregunta: {request.question[:50]}..."
-    })
+        # DATA_ONLY o DASHBOARD → data_agent
+        step["goto"] = "data_agent"
+        return Command(
+            goto="data_agent",
+            update={
+                "routing_decision": decision,
+                "agent_steps": state.get("agent_steps", []) + [step]
+            }
+        )
 
-    router = get_intent_router()
-    decision = router.route(request.question)
+    except Exception as e:
+        print(f"[Router] Error: {e}")
+        step["error"] = str(e)
+        # Fallback: ir a data_agent con dashboard
+        fallback = RoutingDecision(
+            response_type=ResponseType.DASHBOARD,
+            needs_sql=True,
+            needs_dashboard=True,
+            needs_narrative=True,
+            confidence=0.5,
+            reasoning="Router fallback"
+        )
+        step["goto"] = "data_agent"
+        return Command(
+            goto="data_agent",
+            update={
+                "routing_decision": fallback,
+                "agent_steps": state.get("agent_steps", []) + [step]
+            }
+        )
 
-    yield json.dumps({
-        "event": "progress",
-        "message": f"📋 Tipo detectado: {decision.response_type.value}",
-        "step": "router_complete",
-        "detail": decision.reasoning
-    })
-    await asyncio.sleep(0.1)
 
-    # Paso 2: Si es conversacional o clarificacion, responder directo
-    if decision.response_type in [ResponseType.CONVERSATIONAL, ResponseType.CLARIFICATION]:
-        yield json.dumps({
-            "event": "progress",
-            "message": "💬 Generando respuesta...",
-            "step": "direct_response"
-        })
+@traced("DataAgent")
+def data_agent_node(state: SupervisorState) -> Command[Literal["presentation", "reflection", "__end__"]]:
+    """
+    Nodo DataAgent que ejecuta queries.
+    Flujo Router-as-CEO: data_agent → presentation → END (o → END si data_only)
+    """
+    step = {
+        "node": "data_agent",
+        "timestamp": datetime.utcnow().isoformat(),
+    }
 
+    try:
+        agent = get_data_agent()
+        payload = agent.run(
+            question=state["question"],
+            date_from=state.get("date_from"),
+            date_to=state.get("date_to")
+        )
+
+        step["refs_count"] = len(payload.available_refs)
+        step["status"] = "success"
+        print(f"[DataAgent] Completado: {len(payload.available_refs)} refs")
+
+        # Determinar siguiente paso basado en routing_decision
+        decision = state.get("routing_decision")
+        needs_dashboard = decision.needs_dashboard if decision else True
+
+        if needs_dashboard:
+            step["goto"] = "presentation"
+            return Command(
+                goto="presentation",
+                update={
+                    "data_payload": payload,
+                    "last_error": None,
+                    "agent_steps": state.get("agent_steps", []) + [step]
+                }
+            )
+        else:
+            # DATA_ONLY: terminar sin presentation
+            step["goto"] = "end"
+            return Command(
+                goto=END,
+                update={
+                    "data_payload": payload,
+                    "last_error": None,
+                    "agent_steps": state.get("agent_steps", []) + [step]
+                }
+            )
+
+    except Exception as e:
+        error_msg = str(e)
+        step["error"] = error_msg
+        step["status"] = "error"
+        print(f"[DataAgent] Error: {e}")
+
+        retry_count = state.get("retry_count", 0)
+        max_retries = state.get("max_retries", 3)
+
+        # Si aún podemos reintentar, ir a reflection
+        if retry_count < max_retries:
+            return Command(
+                goto="reflection",
+                update={
+                    "last_error": error_msg,
+                    "retry_count": retry_count + 1,
+                    "agent_steps": state.get("agent_steps", []) + [step]
+                }
+            )
+
+        # Max retries alcanzado - terminar con error
+        step["goto"] = "end"
+        return Command(
+            goto=END,
+            update={
+                "error": f"Max retries ({max_retries}) exceeded: {error_msg}",
+                "agent_steps": state.get("agent_steps", []) + [step]
+            }
+        )
+
+
+@traced("Reflection")
+def reflection_node(state: SupervisorState) -> Command[Literal["data_agent"]]:
+    """
+    Nodo de Reflexión para analizar errores y autocorregir.
+    """
+    step = {
+        "node": "reflection",
+        "timestamp": datetime.utcnow().isoformat(),
+        "retry_count": state.get("retry_count", 0),
+        "error": state.get("last_error")
+    }
+
+    print(f"[Reflection] Retry {state.get('retry_count')}: {state.get('last_error')}")
+
+    # Aquí podríamos usar LLM para analizar el error y ajustar la estrategia
+    # Por ahora, simplemente reintentamos
+
+    return Command(
+        goto="data_agent",
+        update={
+            "agent_steps": state.get("agent_steps", []) + [step]
+        }
+    )
+
+
+@traced("Presentation")
+def presentation_node(state: SupervisorState) -> Command[Literal["__end__"]]:
+    """
+    Nodo PresentationAgent que genera el dashboard.
+    Flujo Router-as-CEO: presentation → END
+    """
+    step = {
+        "node": "presentation",
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    if state.get("error") or not state.get("data_payload"):
+        step["status"] = "skipped"
+        step["goto"] = "end"
+        return Command(
+            goto=END,
+            update={"agent_steps": state.get("agent_steps", []) + [step]}
+        )
+
+    try:
+        agent = get_presentation_agent()
+        spec = agent.run(
+            question=state["question"],
+            payload=state["data_payload"]
+        )
+
+        step["status"] = "success"
+        step["title"] = spec.title
+        step["goto"] = "end"
+        print(f"[Presentation] Dashboard: {spec.title}")
+
+        return Command(
+            goto=END,
+            update={
+                "dashboard_spec": spec,
+                "agent_steps": state.get("agent_steps", []) + [step]
+            }
+        )
+
+    except Exception as e:
+        step["error"] = str(e)
+        step["status"] = "error"
+        step["goto"] = "end"
+        print(f"[Presentation] Error: {e}")
+
+        return Command(
+            goto=END,
+            update={
+                "error": f"Presentation error: {str(e)}",
+                "agent_steps": state.get("agent_steps", []) + [step]
+            }
+        )
+
+
+@traced("DirectResponse")
+def direct_response_node(state: SupervisorState) -> Command[Literal["__end__"]]:
+    """
+    Nodo para respuestas directas (conversacionales).
+    Flujo Router-as-CEO: direct_response → END
+    """
+    step = {
+        "node": "direct_response",
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    decision = state.get("routing_decision")
+
+    if decision and decision.direct_response:
+        response = decision.direct_response
         spec = DashboardSpec(
             title="SQL Agent",
             subtitle="Asistente de datos",
-            conclusion=decision.direct_response or "",
+            conclusion=response,
             slots=SlotConfig(
                 filters=[],
                 series=[],
                 charts=[],
-                narrative=[
-                    NarrativeConfig(type="summary", text=decision.direct_response or "")
-                ]
+                narrative=[NarrativeConfig(type="summary", text=response)]
             )
         )
 
-        yield json.dumps({
-            "event": "complete",
-            "message": "✨ Respuesta lista",
-            "trace_id": trace,
-            "result": {
-                "success": True,
-                "dashboard_spec": spec.model_dump() if hasattr(spec, 'model_dump') else spec.dict(),
-                "data_payload": {"kpis": None, "time_series": [], "top_items": [], "tables": []},
-                "data_meta": {"available_refs": [], "datasets_count": 0, "has_kpis": False, "has_time_series": False, "has_top_items": False}
+        step["status"] = "success"
+        step["goto"] = "end"
+        return Command(
+            goto=END,
+            update={
+                "direct_response": response,
+                "dashboard_spec": spec,
+                "agent_steps": state.get("agent_steps", []) + [step]
             }
-        })
-        return
+        )
 
-    # Paso 3: Necesita SQL - Ejecutar DataAgent
-    data_payload = None
+    step["status"] = "no_response"
+    step["goto"] = "end"
+    return Command(
+        goto=END,
+        update={"agent_steps": state.get("agent_steps", []) + [step]}
+    )
 
-    # Check for demo mode
-    if os.getenv("DEMO_MODE", "false").lower() == "true":
-        yield json.dumps({
-            "event": "progress",
-            "message": "📊 Modo demo - usando datos de ejemplo...",
-            "step": "demo"
-        })
-        await asyncio.sleep(0.5)
-        data_payload = get_demo_data()
-    else:
-        yield json.dumps({
-            "event": "progress",
-            "message": "📡 Conectando con base de datos...",
-            "step": "data_connect"
-        })
-        await asyncio.sleep(0.1)
 
+# ============== Construcción del Grafo ==============
+
+def build_insight_graph_v2(checkpointer=None):
+    """
+    Construye el grafo v2 con Router-as-CEO Pattern (LangGraph 2025).
+
+    Args:
+        checkpointer: Optional checkpointer for state persistence (PostgresSaver or MemorySaver)
+
+    Flujo simplificado (Router como CEO):
+    [Router] --> [DataAgent] --> [Presentation] --> [END]
+         |            |
+         |            +--> [Reflection] --> [DataAgent] (retry loop)
+         |
+         +--> [DirectResponse] --> [END]
+
+    Cada nodo usa Command objects para routing dinámico.
+    No hay supervisor intermediario.
+    """
+    workflow = StateGraph(SupervisorState)
+
+    # Agregar nodos (sin supervisor - Router es el CEO)
+    workflow.add_node("router", router_node)
+    workflow.add_node("data_agent", data_agent_node)
+    workflow.add_node("reflection", reflection_node)
+    workflow.add_node("presentation", presentation_node)
+    workflow.add_node("direct_response", direct_response_node)
+
+    # Entry point: Router (CEO)
+    workflow.set_entry_point("router")
+
+    # Compilar con o sin checkpointer
+    if checkpointer:
+        return workflow.compile(checkpointer=checkpointer, name="InsightGraph-v2-RouterCEO")
+    return workflow.compile(name="InsightGraph-v2-RouterCEO")
+
+
+# ============== Singleton del Grafo ==============
+
+_compiled_graph_v2 = None
+_compiled_graph_v2_with_checkpointer = None
+
+
+def get_insight_graph_v2(use_checkpointer: bool = True):
+    """
+    Obtiene el grafo v2 compilado (singleton).
+
+    Args:
+        use_checkpointer: If True, tries to use the global checkpointer for persistence
+    """
+    global _compiled_graph_v2, _compiled_graph_v2_with_checkpointer
+
+    if use_checkpointer:
+        # Try to get checkpointer from global manager
         try:
-            agent = get_data_agent()
-
-            yield json.dumps({
-                "event": "progress",
-                "message": "🔎 Ejecutando consultas SQL...",
-                "step": "data_query",
-                "detail": f"Dominio: {decision.domain or 'general'}"
-            })
-
-            data_payload = agent.run(
-                question=request.question,
-                date_from=request.date_from.isoformat() if request.date_from else None,
-                date_to=request.date_to.isoformat() if request.date_to else None
-            )
-
-            yield json.dumps({
-                "event": "progress",
-                "message": f"✅ Datos obtenidos: {len(data_payload.available_refs)} datasets",
-                "step": "data_complete",
-                "detail": ", ".join(data_payload.available_refs[:5])
-            })
-            await asyncio.sleep(0.1)
-
+            manager = get_checkpointer_manager()
+            if manager and manager.checkpointer:
+                if _compiled_graph_v2_with_checkpointer is None:
+                    _compiled_graph_v2_with_checkpointer = build_insight_graph_v2(manager.checkpointer)
+                    print("[Graph v2] Compiled with checkpointer")
+                return _compiled_graph_v2_with_checkpointer
         except Exception as e:
-            yield json.dumps({
-                "event": "error",
-                "message": f"❌ Error obteniendo datos: {str(e)}",
-                "step": "data_error"
-            })
-            return
+            print(f"[Graph v2] Checkpointer not available: {e}")
 
-    # Paso 4: Si solo necesita datos (DATA_ONLY), responder sin dashboard
-    if decision.response_type == ResponseType.DATA_ONLY:
-        yield json.dumps({
-            "event": "progress",
-            "message": "📝 Generando resumen de datos...",
-            "step": "data_summary"
-        })
-
-        kpi_text = []
-        if data_payload.kpis:
-            kpis = data_payload.kpis
-            if hasattr(kpis, 'total_sales') and kpis.total_sales:
-                kpi_text.append(f"Ventas totales: ${kpis.total_sales:,.0f}")
-            if hasattr(kpis, 'total_orders') and kpis.total_orders:
-                kpi_text.append(f"Ordenes: {kpis.total_orders:,}")
-            if hasattr(kpis, 'avg_order_value') and kpis.avg_order_value:
-                kpi_text.append(f"Ticket promedio: ${kpis.avg_order_value:,.0f}")
-
-        # Generar slots visuales basados en el payload (KPIs, Charts)
-        visual_slots = build_visual_slots(data_payload)
-        # Agregar narrativa
-        visual_slots.narrative = [NarrativeConfig(type="summary", text=". ".join(kpi_text))] if kpi_text else []
-
-        spec = DashboardSpec(
-            title="Resumen de Datos",
-            subtitle=request.question,
-            conclusion=". ".join(kpi_text) if kpi_text else "Datos obtenidos",
-            slots=visual_slots
-        )
-        print(f"[DATA_ONLY] Generated spec with {len(visual_slots.series)} KPIs, {len(visual_slots.charts)} charts")
-
-        yield json.dumps({
-            "event": "complete",
-            "message": "✨ Datos listos",
-            "trace_id": trace,
-            "result": {
-                "success": True,
-                "dashboard_spec": spec.model_dump() if hasattr(spec, 'model_dump') else spec.dict(),
-                "data_payload": {
-                    "kpis": data_payload.kpis.model_dump() if data_payload.kpis and hasattr(data_payload.kpis, 'model_dump') else (data_payload.kpis.dict() if data_payload.kpis else None),
-                    "time_series": [ts.model_dump() if hasattr(ts, 'model_dump') else ts.dict() for ts in data_payload.time_series] if data_payload.time_series else [],
-                    "top_items": [ti.model_dump() if hasattr(ti, 'model_dump') else ti.dict() for ti in data_payload.top_items] if data_payload.top_items else [],
-                    "tables": []
-                },
-                "data_meta": {
-                    "available_refs": data_payload.available_refs,
-                    "datasets_count": len(data_payload.datasets_meta) if data_payload.datasets_meta else 0,
-                    "has_kpis": data_payload.kpis is not None,
-                    "has_time_series": bool(data_payload.time_series),
-                    "has_top_items": bool(data_payload.top_items)
-                }
-            }
-        })
-        return
-
-    # Paso 5: Necesita Dashboard - Ejecutar PresentationAgent
-    yield json.dumps({
-        "event": "progress",
-        "message": "🤖 Activando UltraThink para analisis profundo...",
-        "step": "presentation_start"
-    })
-    await asyncio.sleep(0.1)
-
-    yield json.dumps({
-        "event": "progress",
-        "message": "💭 Razonando sobre los datos y generando insights...",
-        "step": "ultrathink",
-        "detail": "Analizando patrones, tendencias y anomalias"
-    })
-
-    try:
-        pres_agent = get_presentation_agent()
-        spec = pres_agent.run(
-            question=request.question,
-            payload=data_payload
-        )
-
-        yield json.dumps({
-            "event": "progress",
-            "message": f"📈 Dashboard generado: {spec.title}",
-            "step": "presentation_complete",
-            "detail": f"{len(spec.slots.series)} KPIs, {len(spec.slots.charts)} graficos"
-        })
-        await asyncio.sleep(0.1)
-
-    except Exception as e:
-        yield json.dumps({
-            "event": "error",
-            "message": f"❌ Error generando dashboard: {str(e)}",
-            "step": "presentation_error"
-        })
-        return
-
-    # Evento: Resultado final
-    yield json.dumps({
-        "event": "complete",
-        "message": "✨ Analisis completado",
-        "trace_id": trace,
-        "result": {
-            "success": True,
-            "dashboard_spec": spec.model_dump() if hasattr(spec, 'model_dump') else spec.dict(),
-            "data_payload": {
-                "kpis": data_payload.kpis.model_dump() if data_payload.kpis and hasattr(data_payload.kpis, 'model_dump') else (data_payload.kpis.dict() if data_payload.kpis else None),
-                "time_series": [ts.model_dump() if hasattr(ts, 'model_dump') else ts.dict() for ts in data_payload.time_series] if data_payload.time_series else [],
-                "top_items": [ti.model_dump() if hasattr(ti, 'model_dump') else ti.dict() for ti in data_payload.top_items] if data_payload.top_items else [],
-                "tables": []
-            },
-            "data_meta": {
-                "available_refs": data_payload.available_refs,
-                "datasets_count": len(data_payload.datasets_meta) if data_payload.datasets_meta else 0,
-                "has_kpis": data_payload.kpis is not None,
-                "has_time_series": bool(data_payload.time_series),
-                "has_top_items": bool(data_payload.top_items)
-            }
-        }
-    })
+    # Fallback to graph without checkpointer
+    if _compiled_graph_v2 is None:
+        _compiled_graph_v2 = build_insight_graph_v2()
+        print("[Graph v2] Compiled without checkpointer")
+    return _compiled_graph_v2
 
 
-def run_insight_graph(
+# ============== Entry Points ==============
+
+def run_insight_graph_v2(
     request: QueryRequest,
     trace_id: Optional[str] = None,
     thread_id: Optional[str] = None
-) -> InsightState:
+) -> SupervisorState:
     """
-    Entry point principal para ejecutar el grafo completo.
-    Usa el Router Inteligente para decidir el flujo.
+    Ejecuta el grafo v2 de forma síncrona.
 
     Args:
-        request: QueryRequest con la pregunta y filtros
-        trace_id: ID de trazabilidad opcional para LangSmith
-        thread_id: ID del hilo de conversación para persistencia
-
-    Returns:
-        InsightState con el resultado completo
+        request: Query request with question and filters
+        trace_id: Trace ID for observability
+        thread_id: Thread ID for checkpointer persistence (enables conversation memory)
     """
-    import uuid
-    import os
-
-    # Generar IDs si no se proveen
     trace = trace_id or str(uuid.uuid4())[:8]
-    thread = thread_id or str(uuid.uuid4())
+    thread = thread_id or f"thread-{trace}"
 
-    # Preparar estado inicial
-    initial_state: InsightState = {
+    initial_state: SupervisorState = {
         "question": request.question,
         "date_from": request.date_from.isoformat() if request.date_from else None,
         "date_to": request.date_to.isoformat() if request.date_to else None,
         "filters": request.filters,
         "routing_decision": None,
         "data_payload": None,
+        "retry_count": 0,
+        "max_retries": 3,
+        "last_error": None,
         "dashboard_spec": None,
         "direct_response": None,
-        "error": None,
         "trace_id": trace,
-        "started_at": datetime.utcnow().isoformat(),
-        "completed_at": None
+        "error": None,
+        "agent_steps": []
     }
 
-    print(f"[Graph] Iniciando con trace_id={trace}, thread_id={thread}")
-    print(f"[Graph] Pregunta: {request.question}")
+    graph = get_insight_graph_v2()
+    config = {
+        "run_name": f"InsightGraph-v2-{trace}",
+        "tags": ["sql-agent", "v2", "supervisor"],
+        "metadata": {"trace_id": trace},
+        "configurable": {
+            "thread_id": thread  # For checkpointer persistence
+        }
+    }
 
-    # Check for demo mode
-    if os.getenv("DEMO_MODE", "false").lower() == "true":
-        print("[Graph] DEMO MODE - usando datos de ejemplo")
-        initial_state["data_payload"] = get_demo_data()
-        # Run only presentation agent
-        try:
-            agent = get_presentation_agent()
-            spec = agent.run(
-                question=initial_state["question"],
-                payload=initial_state["data_payload"]
-            )
-            initial_state["dashboard_spec"] = spec
-            initial_state["completed_at"] = datetime.utcnow().isoformat()
-            print(f"[Graph] Demo completado: {spec.title}")
-        except Exception as e:
-            initial_state["error"] = f"Error en demo mode: {str(e)}"
-            print(f"[Graph] Error en demo: {e}")
-        return initial_state
-
-    # Ejecutar grafo normal con persistencia
-    graph = get_insight_graph()
-    run_config = _build_run_config(trace, thread_id=thread)
-    result = graph.invoke(initial_state, config=run_config)
-
-    print(f"[Graph] Completado. Error: {result.get('error')}")
+    print(f"[Graph v2] Starting with trace_id={trace}, thread_id={thread}")
+    result = graph.invoke(initial_state, config=config)
+    print(f"[Graph v2] Completed. Steps: {len(result.get('agent_steps', []))}")
 
     return result
+
+
+async def run_insight_graph_v2_streaming(
+    request: QueryRequest,
+    trace_id: Optional[str] = None,
+    thread_id: Optional[str] = None
+):
+    """
+    Versión streaming del grafo v2.
+    Genera eventos SSE con el progreso.
+
+    Args:
+        request: Query request with question and filters
+        trace_id: Trace ID for observability
+        thread_id: Thread ID for checkpointer persistence (enables conversation memory)
+    """
+    trace = trace_id or str(uuid.uuid4())[:8]
+    thread = thread_id or f"thread-{trace}"
+
+    initial_state: SupervisorState = {
+        "question": request.question,
+        "date_from": request.date_from.isoformat() if request.date_from else None,
+        "date_to": request.date_to.isoformat() if request.date_to else None,
+        "filters": request.filters,
+        "routing_decision": None,
+        "data_payload": None,
+        "retry_count": 0,
+        "max_retries": 3,
+        "last_error": None,
+        "dashboard_spec": None,
+        "direct_response": None,
+        "trace_id": trace,
+        "error": None,
+        "agent_steps": []
+    }
+
+    # Evento: Inicio
+    yield json.dumps({
+        "event": "start",
+        "trace_id": trace,
+        "message": "🔍 Analizando tu pregunta...",
+        "step": "init",
+        "timestamp": datetime.utcnow().isoformat()
+    })
+    await asyncio.sleep(0.05)
+
+    graph = get_insight_graph_v2()
+    config = {
+        "run_name": f"InsightGraph-v2-{trace}",
+        "tags": ["sql-agent", "v2", "supervisor", "streaming"],
+        "metadata": {"trace_id": trace},
+        "configurable": {
+            "thread_id": thread  # For checkpointer persistence
+        }
+    }
+
+    last_node = None
+    final_state = None
+
+    try:
+        # Stream updates from the graph
+        async for event in graph.astream(initial_state, config=config, stream_mode="updates"):
+            for node_name, node_output in event.items():
+                if node_name != last_node:
+                    # Emitir evento de progreso
+                    message = _get_node_message(node_name)
+                    yield json.dumps({
+                        "event": "progress",
+                        "message": message,
+                        "step": node_name,
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    await asyncio.sleep(0.05)
+                    last_node = node_name
+
+                # Guardar estado final
+                if isinstance(node_output, dict):
+                    if final_state is None:
+                        final_state = node_output
+                    else:
+                        final_state.update(node_output)
+
+    except Exception as e:
+        yield json.dumps({
+            "event": "error",
+            "message": f"❌ Error: {str(e)}",
+            "step": "error",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        return
+
+    # Evento: Completado
+    if final_state:
+        result = _build_result(final_state)
+        yield json.dumps({
+            "event": "complete",
+            "message": "✨ Análisis completado",
+            "trace_id": trace,
+            "result": result
+        })
+
+
+def _get_node_message(node_name: str) -> str:
+    """Obtiene el mensaje de progreso para un nodo."""
+    messages = {
+        "supervisor": "🎯 Supervisor coordinando...",
+        "router": "🧠 Clasificando consulta...",
+        "data_agent": "🔎 Ejecutando consultas SQL...",
+        "reflection": "🔄 Analizando y corrigiendo...",
+        "presentation": "🤖 Generando dashboard...",
+        "direct_response": "💬 Preparando respuesta..."
+    }
+    return messages.get(node_name, f"⚙️ {node_name}...")
+
+
+def _build_result(state: SupervisorState) -> dict:
+    """Construye el resultado final para SSE."""
+    spec = state.get("dashboard_spec")
+    payload = state.get("data_payload")
+
+    return {
+        "success": state.get("error") is None,
+        "dashboard_spec": spec.model_dump() if spec and hasattr(spec, 'model_dump') else (spec.dict() if spec else None),
+        "data_payload": {
+            "kpis": payload.kpis.model_dump() if payload and payload.kpis and hasattr(payload.kpis, 'model_dump') else (payload.kpis.dict() if payload and payload.kpis else None),
+            "time_series": [ts.model_dump() if hasattr(ts, 'model_dump') else ts.dict() for ts in payload.time_series] if payload and payload.time_series else [],
+            "top_items": [ti.model_dump() if hasattr(ti, 'model_dump') else ti.dict() for ti in payload.top_items] if payload and payload.top_items else [],
+            "tables": []
+        } if payload else None,
+        "data_meta": {
+            "available_refs": payload.available_refs if payload else [],
+            "datasets_count": len(payload.datasets_meta) if payload and payload.datasets_meta else 0,
+            "has_kpis": payload.kpis is not None if payload else False,
+            "has_time_series": bool(payload.time_series) if payload else False,
+            "has_top_items": bool(payload.top_items) if payload else False
+        } if payload else None,
+        "agent_steps": state.get("agent_steps", [])
+    }
+
+
+# ============== Compatibility Aliases ==============
+# For backwards compatibility with v1 imports
+run_insight_graph = run_insight_graph_v2
+run_insight_graph_streaming = run_insight_graph_v2_streaming
+get_insight_graph = get_insight_graph_v2
+
+# Legacy state type alias
+InsightState = SupervisorState
+
+__all__ = [
+    # Primary v2 exports
+    "get_insight_graph_v2",
+    "run_insight_graph_v2",
+    "run_insight_graph_v2_streaming",
+    "build_insight_graph_v2",
+    # Compatibility aliases
+    "get_insight_graph",
+    "run_insight_graph",
+    "run_insight_graph_streaming",
+    "InsightState",
+    # Utilities
+    "build_visual_slots",
+    "get_demo_data",
+    "get_cache_stats",
+    "invalidate_cache",
+]

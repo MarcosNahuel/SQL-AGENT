@@ -92,6 +92,7 @@ class IntentRouter:
         "reposicion", "reposición", "reponer", "necesitar", "recomendar",
         "bajo stock", "alta rotacion", "rotacion", "rotación",
         "quebrar", "quiebre", "agotar", "agotarse", "agotando", "faltante",
+        "critico", "criticos", "crítico", "críticos", "alertas", "alerta",
         "proyeccion", "proyectar", "estimar", "predecir",
         "margen", "ganancia", "beneficio",
         "cyber", "cybermonday", "black friday", "hot sale",
@@ -101,7 +102,7 @@ class IntentRouter:
         "como fue", "como fueron", "como estuvo", "como me fue",
         "resumen", "resume", "resumir", "resumime",
         "situacion", "estado de", "status",
-        "ultimos", "ultimas", "recientes", "hoy", "ayer",
+        "ultimos", "ultimas", "recientes", "hoy", "ayer", "actualmente", "actual",
         "este mes", "esta semana", "este año",
         # Preguntas analíticas que requieren respuesta narrativa
         "cual fue", "cuál fue", "cual es", "cuál es",
@@ -151,7 +152,7 @@ class IntentRouter:
             )
         else:
             self.llm = ChatGoogleGenerativeAI(
-                model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash-thinking-exp"),
+                model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
                 google_api_key=os.getenv("GEMINI_API_KEY"),
                 temperature=0.1
             )

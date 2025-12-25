@@ -219,14 +219,16 @@ class DataAgent:
         """
         Usa el LLM para decidir que queries ejecutar basado en la pregunta.
         El LLM SOLO puede elegir de la lista de queries disponibles.
-        FORZANDO heurísticas para pruebas.
+        LLM-based reasoning con heuristics como fallback.
         """
-        import sys
-        # FORZAR heuristicas SIEMPRE para evitar problemas con el LLM
-        print(f"[DataAgent] FORZANDO heuristicas para: {question[:50]}", file=sys.stderr, flush=True)
-        return self._decide_queries_heuristic(question)
+        # Usar heuristics como fallback rapido si LLM deshabilitado
+        use_llm = os.getenv("DATA_AGENT_USE_LLM", "true").lower() == "true"
 
-        # Codigo original comentado temporalmente
+        if not use_llm:
+            print(f"[DataAgent] LLM disabled, usando heuristicas para: {question[:50]}", file=sys.stderr, flush=True)
+            return self._decide_queries_heuristic(question)
+
+        print(f"[DataAgent] LLM reasoning para: {question[:50]}", file=sys.stderr, flush=True)
         demo_mode = os.getenv("DEMO_MODE", "false").strip().lower()
 
         available = get_available_queries()

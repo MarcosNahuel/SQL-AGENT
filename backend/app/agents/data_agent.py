@@ -41,6 +41,7 @@ from ..schemas.payload import (
 from ..schemas.intent import QueryPlan
 from ..prompts.ultrathink import get_query_decision_prompt
 from ..utils.date_parser import extract_comparison_dates, is_comparison_query
+from ..utils.robust_parser import parse_json_robust, RobustJSONParser
 
 
 def retry_with_backoff(max_retries: int = 3, base_delay: float = 2.0, max_delay: float = 60.0):
@@ -126,67 +127,13 @@ class DataAgent:
     def _parse_json_robust(self, content: str) -> dict:
         """
         Parser JSON robusto para respuestas LLM.
-        Maneja: markdown, comillas simples, texto extra, etc.
+        Usa el RobustJSONParser centralizado con soporte para auto-corrección.
 
         Returns:
             dict parseado o {} si falla completamente
         """
-        import json
-        import re
-
-        if not content or not content.strip():
-            return {}
-
-        content = content.strip()
-
-        # 1. Intentar parsear directamente (caso ideal)
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            pass
-
-        # 2. Remover markdown code blocks
-        if "```" in content:
-            match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
-            if match:
-                content = match.group(1).strip()
-                try:
-                    return json.loads(content)
-                except json.JSONDecodeError:
-                    pass
-
-        # 3. Buscar objeto JSON con regex (maneja texto extra)
-        json_match = re.search(r'\{[\s\S]*\}', content)
-        if json_match:
-            json_str = json_match.group(0)
-            try:
-                return json.loads(json_str)
-            except json.JSONDecodeError:
-                pass
-
-        # 4. Intentar fix de comillas (solo si no hay apóstrofes en texto)
-        # Esto es arriesgado pero útil para LLMs que usan Python dict syntax
-        if "'" in content and '"' not in content:
-            try:
-                # Solo reemplazar comillas simples alrededor de keys/values
-                fixed = re.sub(r"'(\w+)'", r'"\1"', content)
-                fixed = re.sub(r":\s*'([^']*)'", r': "\1"', fixed)
-                return json.loads(fixed)
-            except json.JSONDecodeError:
-                pass
-
-        # 5. Fallback: intentar extraer query_ids con regex
-        query_ids_match = re.search(r'query_ids["\']?\s*:\s*\[(.*?)\]', content, re.IGNORECASE)
-        if query_ids_match:
-            ids_str = query_ids_match.group(1)
-            # Extraer strings entre comillas
-            ids = re.findall(r'["\']([^"\']+)["\']', ids_str)
-            if ids:
-                return {"query_ids": ids, "params": {}}
-
-        # 6. Falló todo
-        print(f"[DataAgent] JSON parse failed for: {content[:200]}")
-        return {}
+        # Usar el parser robusto centralizado con LLM para auto-corrección
+        return parse_json_robust(content, llm=self.llm_gemini)
 
     def _decide_queries_heuristic(self, question: str) -> QueryPlan:
         """

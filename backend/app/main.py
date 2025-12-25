@@ -59,6 +59,14 @@ async def lifespan(app: FastAPI):
 
     print(f"LangGraph checkpointer: {'PostgreSQL' if checkpointer_manager.is_postgres else 'Memory'}")
 
+    # Initialize and test chat memory client
+    from .memory.chat_memory import get_memory_client
+    memory_client = get_memory_client()
+    print(f"Chat memory client: {'AVAILABLE' if memory_client.is_available else 'NOT AVAILABLE'}")
+    if not memory_client.is_available:
+        print(f"  SUPABASE_URL: {'SET' if os.getenv('SUPABASE_URL') else 'MISSING'}")
+        print(f"  SUPABASE_ANON_KEY: {'SET' if os.getenv('SUPABASE_ANON_KEY') else 'MISSING'}")
+
     yield
 
     # Shutdown
@@ -100,6 +108,7 @@ class InsightRequest(BaseModel):
     date_from: Optional[date] = Field(None, description="Fecha inicio")
     date_to: Optional[date] = Field(None, description="Fecha fin")
     filters: Optional[dict] = Field(default_factory=dict)
+    thread_id: Optional[str] = Field(None, description="ID del hilo de conversación para persistencia")
 
 
 class InsightResponse(BaseModel):
@@ -223,8 +232,9 @@ async def run_insights(request: InsightRequest):
             filters=request.filters or {}
         )
 
-        # Ejecutar grafo
-        result = run_insight_graph(query_request, trace_id)
+        # Ejecutar grafo con thread_id para persistencia
+        thread_id = request.thread_id or str(uuid.uuid4())
+        result = run_insight_graph(query_request, trace_id, thread_id=thread_id)
 
         execution_time = (time.time() - start_time) * 1000
 

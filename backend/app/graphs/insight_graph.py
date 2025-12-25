@@ -13,6 +13,7 @@ from datetime import datetime
 from langgraph.graph import StateGraph, END
 from langchain_core.runnables import RunnableConfig
 
+from ..memory.checkpointer import get_checkpointer_manager
 from ..agents.data_agent import DataAgent
 from ..agents.presentation_agent import PresentationAgent
 from ..agents.intent_router import IntentRouter, RoutingDecision, ResponseType, get_intent_router
@@ -295,9 +296,9 @@ def route_after_data(state: InsightState) -> Literal["PresentationAgent", "__end
 
 
 # Construir el grafo
-def build_insight_graph():
+def build_insight_graph(checkpointer=None):
     """
-    Construye el grafo de LangGraph con Router Inteligente.
+    Construye el grafo de LangGraph con Router Inteligente y persistencia.
 
     Flujo:
     [Router] --> [DirectResponse] --> END (conversacional)
@@ -305,6 +306,10 @@ def build_insight_graph():
          +--> [DataAgent] --> [PresentationAgent] --> END (dashboard)
                    |
                    +--> END (data_only, sin graficos)
+
+    Args:
+        checkpointer: PostgresSaver o MemorySaver para persistencia de estado.
+                     Si None, usa el manager global.
     """
     workflow = StateGraph(InsightState)
 
@@ -343,32 +348,90 @@ def build_insight_graph():
     # PresentationAgent -> END
     workflow.add_edge("PresentationAgent", END)
 
-    # Compilar con nombre para LangSmith
-    return workflow.compile(name="InsightGraph-v2")
+    # Compilar con checkpointer para persistencia
+    if checkpointer is None:
+        manager = get_checkpointer_manager()
+        checkpointer = manager.checkpointer
+
+    if checkpointer:
+        print(f"[Graph] Compilando con checkpointer: {type(checkpointer).__name__}")
+        return workflow.compile(checkpointer=checkpointer, name="InsightGraph-v2")
+    else:
+        print("[Graph] Compilando sin checkpointer (memoria no persistente)")
+        return workflow.compile(name="InsightGraph-v2")
 
 
 # Grafo compilado (singleton)
 _compiled_graph = None
+_graph_initialized = False
 
 
-def get_insight_graph():
-    """Obtiene el grafo compilado"""
-    global _compiled_graph
-    if _compiled_graph is None:
-        _compiled_graph = build_insight_graph()
+def get_insight_graph(force_rebuild: bool = False):
+    """
+    Obtiene el grafo compilado con checkpointer para persistencia.
+
+    Args:
+        force_rebuild: Forzar reconstrucción del grafo
+
+    Returns:
+        Grafo compilado con o sin checkpointer
+    """
+    global _compiled_graph, _graph_initialized
+
+    if _compiled_graph is None or force_rebuild:
+        # Obtener checkpointer del manager
+        manager = get_checkpointer_manager()
+
+        # Si el manager no está inicializado, inicializar sync
+        if manager.checkpointer is None and not _graph_initialized:
+            print("[Graph] Inicializando checkpointer sync...")
+            manager.initialize_sync()
+            _graph_initialized = True
+
+        _compiled_graph = build_insight_graph(checkpointer=manager.checkpointer)
+
     return _compiled_graph
 
 
-def _build_run_config(trace_id: str) -> RunnableConfig:
-    return {
+def rebuild_graph_with_checkpointer():
+    """
+    Reconstruye el grafo con el checkpointer actual.
+    Útil después de inicializar el checkpointer async.
+    """
+    global _compiled_graph
+    _compiled_graph = None
+    return get_insight_graph(force_rebuild=True)
+
+
+def _build_run_config(trace_id: str, thread_id: Optional[str] = None) -> RunnableConfig:
+    """
+    Construye config para invocación del grafo.
+
+    Args:
+        trace_id: ID de trazabilidad para LangSmith
+        thread_id: ID del hilo de conversación para persistencia
+
+    Returns:
+        RunnableConfig con thread_id en configurable
+    """
+    config: RunnableConfig = {
         "run_name": f"InsightGraph-{trace_id}",
         "tags": ["sql-agent", "insight-graph"],
         "metadata": {
             "trace_id": trace_id,
             "graph_name": "InsightGraph",
-            "version": "1.0"
+            "version": "2.0"
         }
     }
+
+    # Agregar thread_id para persistencia si está disponible
+    if thread_id:
+        config["configurable"] = {
+            "thread_id": thread_id,
+            "checkpoint_ns": ""  # Namespace vacío por defecto
+        }
+
+    return config
 
 
 def get_demo_data() -> DataPayload:
@@ -423,11 +486,20 @@ def get_demo_data() -> DataPayload:
     )
 
 
-async def run_insight_graph_streaming(request: QueryRequest, trace_id: Optional[str] = None):
+async def run_insight_graph_streaming(
+    request: QueryRequest,
+    trace_id: Optional[str] = None,
+    thread_id: Optional[str] = None
+):
     """
     Version streaming del grafo que genera eventos SSE.
     Yields eventos JSON con el progreso del analisis.
     Usa el Router Inteligente para decidir el flujo.
+
+    Args:
+        request: QueryRequest con la pregunta y filtros
+        trace_id: ID de trazabilidad para LangSmith
+        thread_id: ID del hilo de conversación para persistencia
     """
     import uuid
     import os
@@ -436,11 +508,16 @@ async def run_insight_graph_streaming(request: QueryRequest, trace_id: Optional[
 
     # Preparar estado inicial
     trace = trace_id or str(uuid.uuid4())[:8]
+    thread = thread_id or str(uuid.uuid4())
+
+    # Log para debugging
+    print(f"[Graph Streaming] Iniciando con trace_id={trace}, thread_id={thread}")
 
     # Evento: Inicio
     yield json.dumps({
         "event": "start",
         "trace_id": trace,
+        "thread_id": thread,
         "message": "🔍 Analizando tu pregunta...",
         "step": "init",
         "timestamp": datetime.utcnow().isoformat()
@@ -671,20 +748,29 @@ async def run_insight_graph_streaming(request: QueryRequest, trace_id: Optional[
     })
 
 
-def run_insight_graph(request: QueryRequest, trace_id: Optional[str] = None) -> InsightState:
+def run_insight_graph(
+    request: QueryRequest,
+    trace_id: Optional[str] = None,
+    thread_id: Optional[str] = None
+) -> InsightState:
     """
     Entry point principal para ejecutar el grafo completo.
     Usa el Router Inteligente para decidir el flujo.
 
     Args:
         request: QueryRequest con la pregunta y filtros
-        trace_id: ID de trazabilidad opcional
+        trace_id: ID de trazabilidad opcional para LangSmith
+        thread_id: ID del hilo de conversación para persistencia
 
     Returns:
         InsightState con el resultado completo
     """
     import uuid
     import os
+
+    # Generar IDs si no se proveen
+    trace = trace_id or str(uuid.uuid4())[:8]
+    thread = thread_id or str(uuid.uuid4())
 
     # Preparar estado inicial
     initial_state: InsightState = {
@@ -697,12 +783,12 @@ def run_insight_graph(request: QueryRequest, trace_id: Optional[str] = None) -> 
         "dashboard_spec": None,
         "direct_response": None,
         "error": None,
-        "trace_id": trace_id or str(uuid.uuid4())[:8],
+        "trace_id": trace,
         "started_at": datetime.utcnow().isoformat(),
         "completed_at": None
     }
 
-    print(f"[Graph] Iniciando con trace_id={initial_state['trace_id']}")
+    print(f"[Graph] Iniciando con trace_id={trace}, thread_id={thread}")
     print(f"[Graph] Pregunta: {request.question}")
 
     # Check for demo mode
@@ -724,9 +810,9 @@ def run_insight_graph(request: QueryRequest, trace_id: Optional[str] = None) -> 
             print(f"[Graph] Error en demo: {e}")
         return initial_state
 
-    # Ejecutar grafo normal
+    # Ejecutar grafo normal con persistencia
     graph = get_insight_graph()
-    run_config = _build_run_config(initial_state["trace_id"])
+    run_config = _build_run_config(trace, thread_id=thread)
     result = graph.invoke(initial_state, config=run_config)
 
     print(f"[Graph] Completado. Error: {result.get('error')}")

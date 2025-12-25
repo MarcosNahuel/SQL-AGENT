@@ -304,6 +304,32 @@ QUERY_ALLOWLIST: Dict[str, Dict[str, Any]] = {
         }
     },
 
+    # Ventas agrupadas por mes
+    "sales_by_month": {
+        "description": "Ventas agrupadas por mes para analisis de estacionalidad",
+        "output_type": "time_series",
+        "output_ref": "ts.sales_by_month",
+        "template": """
+            SELECT
+                TO_CHAR(date_created, 'YYYY-MM') as date,
+                SUM(total_amount) as value,
+                COUNT(*) as order_count
+            FROM ml_orders
+            WHERE status = 'paid'
+              AND date_created >= %(date_from)s
+              AND date_created < %(date_to)s
+            GROUP BY TO_CHAR(date_created, 'YYYY-MM')
+            ORDER BY date ASC
+            LIMIT %(limit)s
+        """,
+        "required_params": ["date_from", "date_to"],
+        "default_params": {
+            "date_from": lambda: (date.today() - timedelta(days=395)).isoformat(),
+            "date_to": lambda: (date.today() + timedelta(days=1)).isoformat(),
+            "limit": lambda: 13
+        }
+    },
+
     # Top productos por revenue (filtrado por fecha)
     "top_products_by_revenue": {
         "description": "Top productos ordenados por ingresos en un periodo de tiempo",

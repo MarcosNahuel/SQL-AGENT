@@ -184,6 +184,8 @@ class SupabaseRESTClient:
             rows = self._execute_kpi_sales_summary(safe_params)
         elif query_id == "ts_sales_by_day":
             rows = self._execute_ts_sales_by_day(safe_params)
+        elif query_id == "sales_by_month":
+            rows = self._execute_sales_by_month(safe_params)
         elif query_id == "top_products_by_revenue":
             rows = self._execute_top_products(safe_params)
         elif query_id == "recent_orders":
@@ -311,6 +313,56 @@ class SupabaseRESTClient:
         result = [
             {"date": d, "value": round(data["value"], 2), "order_count": data["order_count"]}
             for d, data in sorted(daily_sales.items())
+        ]
+
+        final_result = result[:limit]
+        _query_cache.set(cache_key, final_result)
+        return final_result
+
+    def _execute_sales_by_month(self, params: Dict) -> List[Dict]:
+        """Ventas por mes - time series mensual"""
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        limit = params.get("limit", 13)
+
+        cache_key = f"sales_month_{date_from}_{date_to}_{limit}"
+        cached = _query_cache.get(cache_key)
+        if cached:
+            return cached
+
+        orders, _ = self._get_table_paginated(
+            "ml_orders",
+            select="date_created,total_amount,status",
+            max_records=100000
+        )
+
+        from collections import defaultdict
+        monthly_sales = defaultdict(lambda: {"value": 0, "order_count": 0})
+
+        for order in orders:
+            # Solo ordenes pagadas
+            if order.get("status") != "paid":
+                continue
+
+            created = order.get("date_created")
+            if not created:
+                continue
+
+            order_date = created[:10] if isinstance(created, str) else str(created)[:10]
+            order_month = order_date[:7]  # YYYY-MM
+
+            if date_from and order_date < date_from:
+                continue
+            if date_to and order_date >= date_to:
+                continue
+
+            amount = float(order.get("total_amount", 0) or 0)
+            monthly_sales[order_month]["value"] += amount
+            monthly_sales[order_month]["order_count"] += 1
+
+        result = [
+            {"date": m, "value": round(data["value"], 2), "order_count": data["order_count"]}
+            for m, data in sorted(monthly_sales.items())
         ]
 
         final_result = result[:limit]

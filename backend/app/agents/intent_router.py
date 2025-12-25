@@ -102,7 +102,17 @@ class IntentRouter:
         "resumen", "resume", "resumir", "resumime",
         "situacion", "estado de", "status",
         "ultimos", "ultimas", "recientes", "hoy", "ayer",
-        "este mes", "esta semana", "este año"
+        "este mes", "esta semana", "este año",
+        # Preguntas analíticas que requieren respuesta narrativa
+        "cual fue", "cuál fue", "cual es", "cuál es",
+        "mas vendido", "más vendido", "menos vendido",
+        "mejor mes", "peor mes", "mejor dia", "peor dia",
+        "que mes", "qué mes", "en que mes", "en qué mes",
+        "que producto", "qué producto", "cuales", "cuáles",
+        "aumentar stock", "aumentar inventario", "ponderar",
+        "debo hacer", "deberia", "debería", "recomienda", "sugieres",
+        "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
     ]
 
     # Dominios de datos

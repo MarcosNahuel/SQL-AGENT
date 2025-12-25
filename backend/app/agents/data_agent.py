@@ -152,6 +152,18 @@ class DataAgent:
         elif "escalad" in q_lower:
             query_ids = ["escalated_cases", "ai_interactions_summary"]
 
+        # Análisis por MES específico (enero, febrero, etc.) - requiere datos mensuales + productos
+        elif any(kw in q_lower for kw in ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]):
+            query_ids = ["kpi_sales_summary", "sales_by_month", "top_products_by_revenue"]
+
+        # Ciclo de ventas / Estacionalidad / Tendencia mensual
+        elif any(kw in q_lower for kw in ["ciclo", "estacionalidad", "temporada", "patron", "patrón"]):
+            query_ids = ["kpi_sales_summary", "sales_by_month", "ts_sales_by_day"]
+
+        # Mejor/peor mes - requiere análisis mensual
+        elif any(kw in q_lower for kw in ["mejor mes", "peor mes", "mes que mas", "mes que más", "cual mes", "cuál mes", "que mes", "qué mes"]):
+            query_ids = ["kpi_sales_summary", "sales_by_month", "top_products_by_revenue"]
+
         # Insights / Analisis profundo - requiere KPIs + tendencias + productos
         elif any(kw in q_lower for kw in ["insight", "analisis profundo", "análisis profundo", "analiza todo", "resumen ejecutivo", "executive summary"]):
             query_ids = ["kpi_sales_summary", "ts_sales_by_day", "top_products_by_revenue"]
@@ -166,7 +178,7 @@ class DataAgent:
 
         # Top productos / Mas vendidos (ANTES de inventario para priorizar)
         elif any(kw in q_lower for kw in ["mas vendido", "más vendido", "mas vendidos", "más vendidos", "top producto", "top productos", "mejores producto", "mejores productos"]):
-            query_ids = ["kpi_sales_summary", "top_products_by_revenue"]
+            query_ids = ["kpi_sales_summary", "top_products_by_revenue", "sales_by_month"]
 
         # Ventas / Revenue
         elif any(kw in q_lower for kw in ["venta", "factura", "ingreso", "revenue", "vendido", "vendieron", "facturado"]):
@@ -175,6 +187,10 @@ class DataAgent:
         # Quiebre de stock / Reposición - necesita KPIs + productos low stock + top ventas
         elif any(kw in q_lower for kw in ["quebrar", "quiebre", "agotar", "agotarse", "agotando", "faltante", "reponer", "reposicion", "reposición"]):
             query_ids = ["kpi_sales_summary", "products_low_stock", "top_products_by_revenue"]
+
+        # Aumentar stock / Ponderar productos - necesita inventario + ventas
+        elif any(kw in q_lower for kw in ["aumentar stock", "aumentar inventario", "ponderar", "priorizar", "debo comprar"]):
+            query_ids = ["kpi_sales_summary", "products_low_stock", "top_products_by_revenue", "products_inventory"]
 
         # Inventario / Stock (sin "vendido")
         elif any(kw in q_lower for kw in ["inventario", "stock", "existencia"]):

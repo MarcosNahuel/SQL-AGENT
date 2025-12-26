@@ -64,7 +64,7 @@ export interface KpiCardConfig {
 }
 
 export interface ChartConfig {
-  type: "line_chart" | "bar_chart" | "area_chart" | "table";
+  type: "line_chart" | "bar_chart" | "area_chart" | "pie_chart" | "table";
   title: string;
   dataset_ref: string;
   x_axis?: string;

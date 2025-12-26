@@ -125,17 +125,26 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS
+# CORS - Note: wildcards like *.vercel.app don't work, need exact origins or "*"
+CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:3002",
+    "http://localhost:3003",
+    # Vercel deployments
+    "https://sql-agent-swart.vercel.app",
+    "https://sql-agent-nahuels-projects-494eed95.vercel.app",
+    "https://sql-agent-git-main-nahuels-projects-494eed95.vercel.app",
+]
+
+# Add custom frontend URL from env if set
+frontend_url = os.getenv("FRONTEND_URL")
+if frontend_url and frontend_url not in CORS_ORIGINS:
+    CORS_ORIGINS.append(frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://localhost:3003",
-        "https://*.vercel.app",
-        os.getenv("FRONTEND_URL", "*")
-    ],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

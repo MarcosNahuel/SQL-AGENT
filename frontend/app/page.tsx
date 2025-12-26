@@ -104,9 +104,9 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen flex bg-gray-950">
-      {/* Left Panel - Chat with Conversations */}
-      <div className="w-[420px] border-r border-gray-800 flex flex-col bg-gray-900/50">
+    <div className="h-screen flex bg-gray-950 overflow-hidden">
+      {/* Left Panel - Chat with Conversations (SCROLLABLE) */}
+      <div className="w-[420px] border-r border-gray-800 flex flex-col bg-gray-900/50 h-full">
         {/* Header */}
         <div className="p-4 border-b border-gray-800 bg-gray-900">
           <div className="flex items-center justify-between">
@@ -318,8 +318,8 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Right Panel - Dashboard with Navigation (FIXED - no scroll) */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Right Panel - Dashboard with Navigation (FIXED - no scroll on outer) */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden">
         {/* Navigation Header - Fixed at top */}
         {dashboards.length > 0 && (
           <div className="flex-shrink-0 px-6 py-3 border-b border-gray-800 bg-gray-900/30 flex items-center justify-between">
@@ -354,9 +354,9 @@ export default function Home() {
           </div>
         )}
 
-        {/* Dashboard Content - Fixed viewport with internal scroll */}
-        <div className="flex-1 overflow-auto bg-gray-950">
-          <div className="p-6 max-w-7xl mx-auto h-full">
+        {/* Dashboard Content - Fixed viewport (scroll only if content overflows) */}
+        <div className="flex-1 overflow-y-auto bg-gray-950">
+          <div className="p-6 max-w-7xl mx-auto">
             {currentDashboard?.spec ? (
               <DashboardRenderer
                 spec={currentDashboard.spec}

@@ -9,7 +9,7 @@ El router analiza la pregunta del usuario y decide:
 """
 import re
 import os
-from typing import Optional, List
+from typing import Optional, List, Literal
 from enum import Enum
 from pydantic import BaseModel, Field
 

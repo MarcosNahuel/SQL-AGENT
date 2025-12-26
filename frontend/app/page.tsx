@@ -361,7 +361,7 @@ export default function Home() {
             {currentDashboard?.spec ? (
               <DashboardRenderer
                 spec={currentDashboard.spec}
-                payload={currentDashboard.payload}
+                payload={currentDashboard.payload ?? undefined}
               />
             ) : (
               <div className="flex flex-col items-center justify-center h-[70vh] text-center">

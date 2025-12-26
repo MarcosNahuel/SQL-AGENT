@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAgentChat, ChatMessage } from "@/hooks";
 import { DashboardRenderer } from "@/components/DashboardRenderer";
+import { DataPayload } from "@/lib/types";
 import { AgentTimeline } from "@/components/AgentTimeline";
 import { ConnectionStatusIndicator, ConnectionDot } from "@/components/ConnectionStatus";
 import {
@@ -361,7 +362,7 @@ export default function Home() {
             {currentDashboard?.spec ? (
               <DashboardRenderer
                 spec={currentDashboard.spec}
-                payload={currentDashboard.payload ?? undefined}
+                payload={currentDashboard.payload as DataPayload | undefined}
               />
             ) : (
               <div className="flex flex-col items-center justify-center h-[70vh] text-center">

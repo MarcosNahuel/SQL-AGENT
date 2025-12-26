@@ -74,3 +74,30 @@ npm run dev
 - Los typos comunes estan mapeados (ej: "ventesa" -> ventas)
 - El frontend usa Zod v4 (syntax diferente a v3)
 - SSE usa protocol DATA de AI SDK v5
+
+## Comandos Personalizados
+
+### /documentacion
+Actualiza la documentacion completa del repositorio en `DOC/ARQUITECTURA_COMPLETA.md`.
+
+**Cuando se ejecuta este comando:**
+1. Analiza toda la estructura del proyecto
+2. Revisa los archivos clave de cada directorio
+3. Documenta el flujo de datos frontend → backend → database
+4. Actualiza la arquitectura de agentes LangGraph
+5. Lista los endpoints API actuales
+6. Actualiza configuracion y troubleshooting
+
+**Archivo generado:** `DOC/ARQUITECTURA_COMPLETA.md`
+
+### /test-local
+Ejecuta pruebas del sistema en localhost:
+1. Verifica health del backend
+2. Prueba queries de stock, ventas, productos
+3. Reporta resultados
+
+## Documentacion
+
+- **CLAUDE.md** - Este archivo (instrucciones para Claude)
+- **DOC/ARQUITECTURA_COMPLETA.md** - Documentacion tecnica completa
+- **DOC/ARQUITECTURA_IA.md** - Arquitectura de agentes IA

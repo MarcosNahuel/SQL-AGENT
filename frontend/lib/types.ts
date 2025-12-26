@@ -42,10 +42,10 @@ export interface DashboardSpec {
 }
 
 export interface SlotConfig {
-  filters: FilterConfig[];
-  series: KpiCardConfig[];
-  charts: (ChartConfig | TableConfig | ComparisonChartConfig)[];
-  narrative: NarrativeConfig[];
+  filters?: FilterConfig[] | Record<string, unknown>;
+  series?: KpiCardConfig[];
+  charts?: (ChartConfig | TableConfig | ComparisonChartConfig)[];
+  narrative?: NarrativeConfig[];
 }
 
 export interface FilterConfig {

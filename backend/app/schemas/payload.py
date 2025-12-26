@@ -94,6 +94,12 @@ class TopItemsData(BaseModel):
     metric: str = Field("revenue", description="Metrica usada para el ranking")
 
 
+class TableData(BaseModel):
+    """Datos de una tabla"""
+    name: str = Field(..., description="Nombre de la tabla (ej: 'recent_orders')")
+    rows: List[Dict[str, Any]] = Field(default_factory=list, description="Filas de datos")
+
+
 class ComparisonPeriod(BaseModel):
     """Datos de un periodo en una comparación"""
     label: str = Field(..., description="Etiqueta del periodo (ej: 'Diciembre 2025')")
@@ -123,7 +129,8 @@ class DataPayload(BaseModel):
     kpis: Optional[KPIData] = Field(None, description="KPIs calculados")
     time_series: Optional[List[TimeSeriesData]] = Field(None, description="Series temporales")
     top_items: Optional[List[TopItemsData]] = Field(None, description="Rankings/tops")
-    raw_data: Optional[List[Dict[str, Any]]] = Field(None, description="Datos crudos para tablas")
+    tables: Optional[List[TableData]] = Field(None, description="Tablas de datos")
+    raw_data: Optional[List[Dict[str, Any]]] = Field(None, description="Datos crudos (legacy)")
 
     # Datos de comparación
     comparison: Optional[ComparisonData] = Field(None, description="Datos de comparación entre periodos")

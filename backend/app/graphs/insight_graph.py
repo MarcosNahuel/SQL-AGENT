@@ -747,7 +747,7 @@ def _get_node_message(node_name: str) -> str:
 
 
 def _build_result(state: InsightStateV2) -> dict:
-    """Construye el resultado final para SSE."""
+    """Construye el resultado final para SSE. Updated 2025-12-26."""
     spec = state.get("dashboard_spec")
     payload = state.get("data_payload")
 
@@ -758,7 +758,7 @@ def _build_result(state: InsightStateV2) -> dict:
             "kpis": payload.kpis.model_dump() if payload and payload.kpis and hasattr(payload.kpis, 'model_dump') else (payload.kpis.dict() if payload and payload.kpis else None),
             "time_series": [ts.model_dump() if hasattr(ts, 'model_dump') else ts.dict() for ts in payload.time_series] if payload and payload.time_series else [],
             "top_items": [ti.model_dump() if hasattr(ti, 'model_dump') else ti.dict() for ti in payload.top_items] if payload and payload.top_items else [],
-            "tables": []
+            "tables": [t.model_dump() if hasattr(t, 'model_dump') else t.dict() for t in payload.tables] if payload and payload.tables else [],
         } if payload else None,
         "data_meta": {
             "available_refs": payload.available_refs if payload else [],

@@ -1,5 +1,6 @@
 """
 DataAgent - Agente de Datos / SQL Engine
+Updated: 2025-12-26
 
 Responsabilidades:
 - Recibir un QueryPlan del IntentClassifier
@@ -34,6 +35,7 @@ from ..schemas.payload import (
     TimeSeriesPoint,
     TopItemsData,
     TopItem,
+    TableData,
     DatasetMeta,
     ComparisonData,
     ComparisonPeriod
@@ -414,6 +416,18 @@ Selecciona las queries a ejecutar."""
                     payload.available_refs.append(output_ref or f"top.{query_id}")
 
                 elif output_type == "table":
+                    # Determinar nombre de la tabla desde el ref
+                    table_name = query_id
+                    if output_ref and output_ref.startswith("table."):
+                        table_name = output_ref.split(".")[1]
+
+                    # Crear TableData y agregar a tables
+                    table_data = TableData(name=table_name, rows=rows)
+                    if payload.tables is None:
+                        payload.tables = []
+                    payload.tables.append(table_data)
+
+                    # También mantener raw_data para compatibilidad
                     if payload.raw_data is None:
                         payload.raw_data = []
                     payload.raw_data.extend(rows)

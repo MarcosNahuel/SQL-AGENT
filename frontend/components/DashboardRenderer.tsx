@@ -43,13 +43,13 @@ export function DashboardRenderer({ spec, payload }: DashboardRendererProps) {
   const { slots } = spec;
 
   // Separate comparison charts from regular charts and tables
-  const comparisonCharts = slots.charts.filter(
+  const comparisonCharts = (slots.charts || []).filter(
     (c): c is ComparisonChartConfig => c.type === "comparison_bar" || c.type === "comparison_kpi"
   );
-  const charts = slots.charts.filter(
+  const charts = (slots.charts || []).filter(
     (c): c is ChartConfig => c.type !== "table" && c.type !== "comparison_bar" && c.type !== "comparison_kpi"
   );
-  const tables = slots.charts.filter((c): c is TableConfig => c.type === "table");
+  const tables = (slots.charts || []).filter((c): c is TableConfig => c.type === "table");
 
   // Categorize charts by type for intelligent placement
   const trendCharts = charts.filter(

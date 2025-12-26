@@ -66,7 +66,7 @@ interface UseAgentChatReturn {
 
 export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatReturn {
   const {
-    apiUrl = "http://localhost:8000/v1/chat/stream",
+    apiUrl = "http://localhost:8000/v1/chat/stream",  // Direct backend
     onDashboardUpdate,
     onAgentStep,
     onError,
@@ -194,6 +194,7 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRet
     signal: AbortSignal,
     attempt: number = 0
   ): Promise<void> => {
+    console.log("[SSE] Sending to:", apiUrl, "question:", question);
     try {
       const response = await fetch(apiUrl, {
         method: "POST",
@@ -239,6 +240,7 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRet
 
     } catch (err) {
       const error = err as Error;
+      console.error("[SSE] Fetch error:", error.name, error.message, "URL:", apiUrl);
 
       // Don't retry on abort
       if (error.name === "AbortError") {

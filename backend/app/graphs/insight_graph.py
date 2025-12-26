@@ -218,7 +218,7 @@ def get_presentation_agent() -> PresentationAgent:
 # ============== Nodos del Grafo v2 (Router-as-CEO) ==============
 
 @traced("Router")
-def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "direct_response", "__end__"]]:
+def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "handle_direct_response", "__end__"]]:
     """
     Nodo Router como CEO - decide Y ejecuta navegación directamente.
     Implementa el patrón Router-as-CEO de LangGraph 2025.
@@ -247,9 +247,9 @@ def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "direct_
 
         # Router como CEO - decide Y navega directamente
         if decision.response_type in [ResponseType.CONVERSATIONAL, ResponseType.CLARIFICATION]:
-            step["goto"] = "direct_response"
+            step["goto"] = "handle_direct_response"
             return Command(
-                goto="direct_response",
+                goto="handle_direct_response",
                 update={
                     "messages": [user_message],  # MEMORIA: add_messages reducer appends
                     "routing_decision": decision,
@@ -551,7 +551,7 @@ def build_insight_graph_v2(checkpointer=None):
     workflow.add_node("data_agent", data_agent_node)
     workflow.add_node("reflection", reflection_node)
     workflow.add_node("presentation", presentation_node)
-    workflow.add_node("direct_response", direct_response_node)
+    workflow.add_node("handle_direct_response", direct_response_node)
 
     # Entry point: Router (CEO)
     workflow.set_entry_point("router")
@@ -741,7 +741,7 @@ def _get_node_message(node_name: str) -> str:
         "data_agent": "🔎 Ejecutando consultas SQL...",
         "reflection": "🔄 Analizando y corrigiendo...",
         "presentation": "🤖 Generando dashboard...",
-        "direct_response": "💬 Preparando respuesta..."
+        "handle_direct_response": "💬 Preparando respuesta..."
     }
     return messages.get(node_name, f"⚙️ {node_name}...")
 

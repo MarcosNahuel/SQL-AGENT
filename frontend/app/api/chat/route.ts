@@ -18,10 +18,15 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // Extract the last user message from useChat format
-    const messages = body.messages || [];
-    const lastMessage = messages[messages.length - 1];
-    const question = lastMessage?.content || '';
+    // Support both formats:
+    // 1. useAgentChat: { question: "..." }
+    // 2. AI SDK v5 useChat: { messages: [...] }
+    let question = body.question || '';
+
+    if (!question && body.messages?.length > 0) {
+      const lastMessage = body.messages[body.messages.length - 1];
+      question = lastMessage?.content || '';
+    }
 
     if (!question) {
       return new Response(

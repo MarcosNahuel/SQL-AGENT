@@ -144,55 +144,54 @@ class SQLAgentState(TypedDict):
     data_payload: Optional[DataPayload]
 
 
-class InsightStateV2(BaseModel):
+class InsightStateV2(TypedDict, total=False):
     """
     Estado del grafo principal v2.5 con Supervisor Pattern.
 
-    Migrado a Pydantic BaseModel para validación fuerte (LangGraph 2025).
+    Usando TypedDict para compatibilidad con LangGraph StateGraph.
 
     Incluye:
     - Historial de mensajes con add_messages reducer
     - Campos para routing dinámico
     - Soporte para reflexión y corrección
     """
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
     # === Messages (con reducer para append automático) ===
-    messages: Annotated[List[AnyMessage], add_messages] = Field(default_factory=list)
+    messages: Annotated[List[AnyMessage], add_messages]
 
     # === Input ===
-    question: str = Field(default="")
-    date_from: Optional[str] = Field(default=None)
-    date_to: Optional[str] = Field(default=None)
-    filters: Optional[dict] = Field(default=None)
+    question: str
+    date_from: Optional[str]
+    date_to: Optional[str]
+    filters: Optional[dict]
 
     # === Routing ===
-    routing_decision: Optional[Any] = Field(default=None)  # RoutingDecision from intent_router
-    current_agent: Optional[str] = Field(default=None)
-    next_agent: Optional[str] = Field(default=None)
-    supervisor_decision: Optional[SupervisorDecision] = Field(default=None)
+    routing_decision: Optional[Any]  # RoutingDecision from intent_router
+    current_agent: Optional[str]
+    next_agent: Optional[str]
+    supervisor_decision: Optional[SupervisorDecision]
 
     # === SQL Agent State (subgrafo) ===
-    sql_output: Optional[SQLOutput] = Field(default=None)
-    execution_results: List[SQLExecutionResult] = Field(default_factory=list)
-    retry_count: int = Field(default=0)
-    max_retries: int = Field(default=3)
-    current_error: Optional[str] = Field(default=None)
-    reflections: List[SQLReflection] = Field(default_factory=list)
+    sql_output: Optional[SQLOutput]
+    execution_results: List[SQLExecutionResult]
+    retry_count: int
+    max_retries: int
+    current_error: Optional[str]
+    reflections: List[SQLReflection]
 
     # === Data ===
-    data_payload: Optional[DataPayload] = Field(default=None)
+    data_payload: Optional[DataPayload]
 
     # === Presentation ===
-    dashboard_spec: Optional[DashboardSpec] = Field(default=None)
-    direct_response: Optional[str] = Field(default=None)
+    dashboard_spec: Optional[DashboardSpec]
+    direct_response: Optional[str]
 
     # === Metadata ===
-    trace_id: Optional[str] = Field(default=None)
-    error: Optional[str] = Field(default=None)
-    started_at: Optional[str] = Field(default=None)
-    completed_at: Optional[str] = Field(default=None)
-    agent_steps: List[dict] = Field(default_factory=list)  # Historial de pasos para observabilidad
+    trace_id: Optional[str]
+    error: Optional[str]
+    last_error: Optional[str]
+    started_at: Optional[str]
+    completed_at: Optional[str]
+    agent_steps: List[dict]  # Historial de pasos para observabilidad
 
 
 def create_initial_state(
@@ -232,6 +231,7 @@ def create_initial_state(
         "direct_response": None,
         "trace_id": trace_id or str(uuid.uuid4())[:8],
         "error": None,
+        "last_error": None,
         "started_at": datetime.utcnow().isoformat(),
         "completed_at": None,
         "agent_steps": []

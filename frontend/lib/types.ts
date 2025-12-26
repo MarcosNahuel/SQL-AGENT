@@ -35,10 +35,10 @@ export interface InsightResponse {
 
 export interface DashboardSpec {
   title: string;
-  subtitle?: string;
-  conclusion?: string;  // Conclusion corta para mostrar en el chat
+  subtitle?: string | null;
+  conclusion?: string | null;  // Conclusion corta para mostrar en el chat
   slots: SlotConfig;
-  generated_at?: string;
+  generated_at?: string | null;
 }
 
 export interface SlotConfig {

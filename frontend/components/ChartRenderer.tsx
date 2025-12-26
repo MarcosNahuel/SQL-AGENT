@@ -162,7 +162,7 @@ export function ChartRenderer({ config, payload, index = 0 }: ChartRendererProps
           date: p.date.slice(5), // MM-DD format
           fullDate: p.date,
           value: p.value,
-          order_count: (p as Record<string, unknown>).order_count,
+          order_count: (p as unknown as Record<string, unknown>).order_count,
         }));
 
         // Calculate trend based on first vs last values

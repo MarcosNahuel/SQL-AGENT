@@ -28,6 +28,7 @@ from langchain_openai import ChatOpenAI
 from ..agents.intent_router import IntentRouter, RoutingDecision, ResponseType, get_intent_router
 from ..agents.data_agent import DataAgent
 from ..agents.presentation_agent import PresentationAgent
+from ..agents.clarification_agent import ClarificationAgent, ClarificationAnalysis, get_clarification_agent
 from ..schemas.intent import QueryRequest
 from ..schemas.payload import DataPayload
 from ..schemas.dashboard import DashboardSpec, SlotConfig, NarrativeConfig, KpiCardConfig, ChartConfig
@@ -218,7 +219,7 @@ def get_presentation_agent() -> PresentationAgent:
 # ============== Nodos del Grafo v2 (Router-as-CEO) ==============
 
 @traced("Router")
-def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "handle_direct_response", "__end__"]]:
+def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "handle_direct_response", "clarification_agent", "__end__"]]:
     """
     Nodo Router como CEO - decide Y ejecuta navegación directamente.
     Implementa el patrón Router-as-CEO de LangGraph 2025.
@@ -227,6 +228,7 @@ def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "handle_
 
     Flujo:
     - CONVERSATIONAL → direct_response
+    - CLARIFICATION → clarification_agent (LLM-based dynamic clarification)
     - DATA_ONLY/DASHBOARD → data_agent
     """
     step = {
@@ -246,10 +248,22 @@ def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "handle_
         print(f"[Router] Decision: {decision.response_type.value}, Domain: {decision.domain}")
 
         # Router como CEO - decide Y navega directamente
-        if decision.response_type in [ResponseType.CONVERSATIONAL, ResponseType.CLARIFICATION]:
+        if decision.response_type == ResponseType.CONVERSATIONAL:
             step["goto"] = "handle_direct_response"
             return Command(
                 goto="handle_direct_response",
+                update={
+                    "messages": [user_message],  # MEMORIA: add_messages reducer appends
+                    "routing_decision": decision,
+                    "agent_steps": state.get("agent_steps", []) + [step]
+                }
+            )
+
+        # CLARIFICATION -> usar ClarificationAgent para respuesta dinamica
+        if decision.response_type == ResponseType.CLARIFICATION:
+            step["goto"] = "clarification_agent"
+            return Command(
+                goto="clarification_agent",
                 update={
                     "messages": [user_message],  # MEMORIA: add_messages reducer appends
                     "routing_decision": decision,
@@ -525,6 +539,125 @@ def direct_response_node(state: InsightStateV2) -> Command[Literal["__end__"]]:
     )
 
 
+@traced("ClarificationAgent")
+def clarification_agent_node(state: InsightStateV2) -> Command[Literal["data_agent", "__end__"]]:
+    """
+    Nodo ClarificationAgent - usa LLM para generar clarificaciones dinamicas.
+
+    A diferencia del sistema determinista anterior, este nodo:
+    1. Analiza semanticamente si la pregunta realmente necesita clarificacion
+    2. Si NO necesita clarificacion, infiere la intencion y continua a data_agent
+    3. Si SI necesita clarificacion, genera pregunta contextual y termina
+
+    MEMORIA: Registra la respuesta/clarificacion en el historial.
+    """
+    step = {
+        "node": "clarification_agent",
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    question = state["question"]
+    decision = state.get("routing_decision")
+
+    # Obtener el tipo de ambiguedad detectada por heuristicas (si existe)
+    detected_ambiguity = None
+    if decision and decision.clarification:
+        # Extraer tipo de ambiguedad del reasoning
+        if "multi_domain" in decision.reasoning:
+            detected_ambiguity = "multi_domain"
+        elif "too_short" in decision.reasoning:
+            detected_ambiguity = "too_short"
+        elif "pronoun" in decision.reasoning:
+            detected_ambiguity = "pronoun_without_context"
+
+    try:
+        agent = get_clarification_agent()
+        analysis = agent.analyze(question, detected_ambiguity)
+
+        step["needs_clarification"] = analysis.needs_clarification
+        step["reasoning"] = analysis.reasoning[:100]
+
+        if not analysis.needs_clarification:
+            # El LLM determino que NO necesita clarificacion - inferir e ir a data_agent
+            print(f"[ClarificationAgent] No clarification needed, inferred: {analysis.inferred_intent}")
+            step["status"] = "inferred"
+            step["goto"] = "data_agent"
+
+            # Actualizar routing_decision con la intencion inferida
+            if decision:
+                decision.response_type = ResponseType.DASHBOARD
+                decision.needs_sql = True
+                decision.needs_dashboard = True
+                decision.domain = analysis.inferred_domain or "sales"
+                decision.reasoning = f"Inferred by ClarificationAgent: {analysis.reasoning}"
+
+            infer_message = AIMessage(content=f"Entendido: {analysis.inferred_intent or question}")
+
+            return Command(
+                goto="data_agent",
+                update={
+                    "messages": [infer_message],
+                    "routing_decision": decision,
+                    "agent_steps": state.get("agent_steps", []) + [step]
+                }
+            )
+
+        # SI necesita clarificacion - generar respuesta contextual y terminar
+        print(f"[ClarificationAgent] Clarification needed: {analysis.clarification_question}")
+        step["status"] = "clarification_generated"
+        step["goto"] = "end"
+
+        # Construir respuesta con la clarificacion
+        clarification_response = analysis.understood_context or ""
+        if clarification_response:
+            clarification_response += "\n\n"
+        clarification_response += analysis.clarification_question or "Podrias ser mas especifico?"
+
+        if analysis.options:
+            clarification_response += "\n\nOpciones sugeridas:\n"
+            for i, opt in enumerate(analysis.options, 1):
+                clarification_response += f"  {i}. {opt}\n"
+
+        # Crear dashboard spec con la clarificacion
+        spec = DashboardSpec(
+            title="Clarificacion necesaria",
+            subtitle="El agente necesita mas contexto",
+            conclusion=analysis.clarification_question,
+            slots=SlotConfig(
+                filters=[],
+                series=[],
+                charts=[],
+                narrative=[NarrativeConfig(type="callout", text=clarification_response)]
+            )
+        )
+
+        response_message = AIMessage(content=clarification_response)
+
+        return Command(
+            goto=END,
+            update={
+                "messages": [response_message],
+                "direct_response": clarification_response,
+                "dashboard_spec": spec,
+                "agent_steps": state.get("agent_steps", []) + [step]
+            }
+        )
+
+    except Exception as e:
+        print(f"[ClarificationAgent] Error: {e}")
+        step["error"] = str(e)
+        step["status"] = "error"
+        step["goto"] = "data_agent"
+
+        # En caso de error, continuar a data_agent (mejor intentar que fallar)
+        return Command(
+            goto="data_agent",
+            update={
+                "agent_steps": state.get("agent_steps", []) + [step]
+            }
+        )
+
+
 # ============== Construcción del Grafo ==============
 
 def build_insight_graph_v2(checkpointer=None):
@@ -539,6 +672,9 @@ def build_insight_graph_v2(checkpointer=None):
          |            |
          |            +--> [Reflection] --> [DataAgent] (retry loop)
          |
+         +--> [ClarificationAgent] --> [DataAgent] (si infiere intencion)
+         |                         \-> [END] (si necesita clarificacion)
+         |
          +--> [DirectResponse] --> [END]
 
     Cada nodo usa Command objects para routing dinámico.
@@ -552,6 +688,7 @@ def build_insight_graph_v2(checkpointer=None):
     workflow.add_node("reflection", reflection_node)
     workflow.add_node("presentation", presentation_node)
     workflow.add_node("handle_direct_response", direct_response_node)
+    workflow.add_node("clarification_agent", clarification_agent_node)
 
     # Entry point: Router (CEO)
     workflow.set_entry_point("router")
@@ -741,7 +878,8 @@ def _get_node_message(node_name: str) -> str:
         "data_agent": "🔎 Ejecutando consultas SQL...",
         "reflection": "🔄 Analizando y corrigiendo...",
         "presentation": "🤖 Generando dashboard...",
-        "handle_direct_response": "💬 Preparando respuesta..."
+        "handle_direct_response": "💬 Preparando respuesta...",
+        "clarification_agent": "🤔 Analizando si necesito mas contexto..."
     }
     return messages.get(node_name, f"⚙️ {node_name}...")
 

@@ -105,12 +105,17 @@ class CheckpointerManager:
                 print(f"[Checkpointer] Connecting to PostgreSQL (sync)...")
 
                 # Create sync connection pool
+                # prepare_threshold=None is CRITICAL for Supabase/PgBouncer Transaction Mode
                 self._sync_pool = ConnectionPool(
                     conninfo=postgres_url,
-                    min_size=2,
+                    min_size=1,
                     max_size=10,
                     open=True,
-                    kwargs={"autocommit": True, "row_factory": dict_row}
+                    kwargs={
+                        "autocommit": True,
+                        "row_factory": dict_row,
+                        "prepare_threshold": None  # Disables prepared statements for PgBouncer
+                    }
                 )
 
                 # Create sync checkpointer
@@ -162,12 +167,17 @@ class CheckpointerManager:
                 print(f"[Checkpointer] Connecting to PostgreSQL (async)...")
 
                 # Create async connection pool
+                # prepare_threshold=None is CRITICAL for Supabase/PgBouncer Transaction Mode
                 self._async_pool = AsyncConnectionPool(
                     conninfo=postgres_url,
-                    min_size=2,
+                    min_size=1,
                     max_size=10,
                     open=False,
-                    kwargs={"autocommit": True, "row_factory": dict_row}
+                    kwargs={
+                        "autocommit": True,
+                        "row_factory": dict_row,
+                        "prepare_threshold": None  # Disables prepared statements for PgBouncer
+                    }
                 )
                 await self._async_pool.open()
 

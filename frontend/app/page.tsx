@@ -318,11 +318,11 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Right Panel - Dashboard with Navigation */}
+      {/* Right Panel - Dashboard with Navigation (FIXED - no scroll) */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Navigation Header */}
+        {/* Navigation Header - Fixed at top */}
         {dashboards.length > 0 && (
-          <div className="px-6 py-3 border-b border-gray-800 bg-gray-900/30 flex items-center justify-between">
+          <div className="flex-shrink-0 px-6 py-3 border-b border-gray-800 bg-gray-900/30 flex items-center justify-between">
             <div className="flex items-center gap-4">
               <button
                 onClick={() => navigateDashboard("prev")}
@@ -354,9 +354,9 @@ export default function Home() {
           </div>
         )}
 
-        {/* Dashboard Content */}
-        <div className="flex-1 overflow-y-auto bg-gray-950">
-          <div className="p-6 max-w-7xl mx-auto">
+        {/* Dashboard Content - Fixed viewport with internal scroll */}
+        <div className="flex-1 overflow-auto bg-gray-950">
+          <div className="p-6 max-w-7xl mx-auto h-full">
             {currentDashboard?.spec ? (
               <DashboardRenderer
                 spec={currentDashboard.spec}

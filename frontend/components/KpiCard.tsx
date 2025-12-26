@@ -25,7 +25,7 @@ export function KpiCard({ config, payload, index = 0 }: KpiCardProps) {
     ? resolveRef(config.delta_ref, payload as Record<string, unknown>)
     : undefined;
 
-  const formattedValue = formatValue(value, config.format);
+  const formattedValue = formatValue(value, config.format || "number");
 
   const Icon = config.icon ? iconMap[config.icon] : DollarSign;
   const isPositive = deltaValue !== undefined && deltaValue > 0;

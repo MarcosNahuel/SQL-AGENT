@@ -55,12 +55,12 @@ export interface FilterConfig {
 }
 
 export interface KpiCardConfig {
-  type: "kpi_card";
+  type?: "kpi_card";
   label: string;
   value_ref: string;
-  format: "currency" | "number" | "percent";
-  delta_ref?: string;
-  icon?: string;
+  format?: "currency" | "number" | "percent";
+  delta_ref?: string | null;
+  icon?: string | null;
 }
 
 export interface ChartConfig {

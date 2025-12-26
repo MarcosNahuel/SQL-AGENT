@@ -94,7 +94,7 @@ export interface TableConfig {
 export interface NarrativeConfig {
   type: "headline" | "insight" | "callout" | "summary";
   text: string;
-  icon?: string;
+  icon?: string | null;
 }
 
 export interface DataPayload {

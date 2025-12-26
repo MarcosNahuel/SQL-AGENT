@@ -64,12 +64,14 @@ export interface KpiCardConfig {
 }
 
 export interface ChartConfig {
-  type: "line_chart" | "bar_chart" | "area_chart";
+  type: "line_chart" | "bar_chart" | "area_chart" | "table";
   title: string;
   dataset_ref: string;
-  x_axis: string;
-  y_axis: string;
-  color?: string;
+  x_axis?: string;
+  y_axis?: string;
+  columns?: string[];
+  max_rows?: number;
+  color?: string | null;
 }
 
 export interface ComparisonChartConfig {

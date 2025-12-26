@@ -62,7 +62,7 @@ export default function Home() {
     currentDashboard,
   } = useAgentChat({
     // Direct backend call - CORS is configured
-    apiUrl: "http://localhost:8000/v1/chat/stream",
+    apiUrl: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/v1/chat/stream",
     onError: (err) => {
       console.error("[Chat Error]", err);
     },

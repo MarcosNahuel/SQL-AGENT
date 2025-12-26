@@ -180,55 +180,9 @@ class PresentationAgent:
                     return response.content
                 raise e
 
-    def _parse_json_robust(self, content: str) -> dict:
-        """
-        Parser JSON robusto para respuestas LLM.
-        Maneja: markdown, comillas simples, texto extra, etc.
-        """
-        import json
-        import re
-
-        if not content or not content.strip():
-            return {}
-
-        content = content.strip()
-
-        # 1. Intentar parsear directamente
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            pass
-
-        # 2. Remover markdown code blocks
-        if "```" in content:
-            match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
-            if match:
-                content = match.group(1).strip()
-                try:
-                    return json.loads(content)
-                except json.JSONDecodeError:
-                    pass
-
-        # 3. Buscar objeto JSON con regex
-        json_match = re.search(r'\{[\s\S]*\}', content)
-        if json_match:
-            json_str = json_match.group(0)
-            try:
-                return json.loads(json_str)
-            except json.JSONDecodeError:
-                pass
-
-        # 4. Fix comillas simples (solo si no hay double quotes)
-        if "'" in content and '"' not in content:
-            try:
-                fixed = re.sub(r"'(\w+)'", r'"\1"', content)
-                fixed = re.sub(r":\s*'([^']*)'", r': "\1"', fixed)
-                return json.loads(fixed)
-            except json.JSONDecodeError:
-                pass
-
-        print(f"[PresentationAgent] JSON parse failed for: {content[:200]}")
-        return {}
+    # NOTA: _parse_json_robust eliminado en v2.5
+    # Ya no se necesita parsing manual de JSON gracias a .with_structured_output()
+    # Ver: _invoke_structured() que usa NarrativeOutput directamente
 
     def _build_spec_heuristic(self, question: str, payload: DataPayload) -> DashboardSpec:
         """

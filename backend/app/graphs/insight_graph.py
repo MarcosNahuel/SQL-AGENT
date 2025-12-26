@@ -223,6 +223,8 @@ def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "direct_
     Nodo Router como CEO - decide Y ejecuta navegación directamente.
     Implementa el patrón Router-as-CEO de LangGraph 2025.
 
+    MEMORIA: Registra la pregunta del usuario en el historial de mensajes.
+
     Flujo:
     - CONVERSATIONAL → direct_response
     - DATA_ONLY/DASHBOARD → data_agent
@@ -231,6 +233,9 @@ def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "direct_
         "node": "router",
         "timestamp": datetime.utcnow().isoformat(),
     }
+
+    # MEMORIA: Agregar pregunta del usuario al historial
+    user_message = HumanMessage(content=state["question"])
 
     try:
         router = get_intent_router()
@@ -246,6 +251,7 @@ def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "direct_
             return Command(
                 goto="direct_response",
                 update={
+                    "messages": [user_message],  # MEMORIA: add_messages reducer appends
                     "routing_decision": decision,
                     "agent_steps": state.get("agent_steps", []) + [step]
                 }
@@ -256,6 +262,7 @@ def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "direct_
         return Command(
             goto="data_agent",
             update={
+                "messages": [user_message],  # MEMORIA: add_messages reducer appends
                 "routing_decision": decision,
                 "agent_steps": state.get("agent_steps", []) + [step]
             }
@@ -277,6 +284,7 @@ def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "direct_
         return Command(
             goto="data_agent",
             update={
+                "messages": [user_message],  # MEMORIA: add_messages reducer appends
                 "routing_decision": fallback,
                 "agent_steps": state.get("agent_steps", []) + [step]
             }
@@ -288,6 +296,8 @@ def data_agent_node(state: InsightStateV2) -> Command[Literal["presentation", "r
     """
     Nodo DataAgent que ejecuta queries.
     Flujo Router-as-CEO: data_agent → presentation → END (o → END si data_only)
+
+    MEMORIA: Registra resumen de datos encontrados en el historial.
     """
     step = {
         "node": "data_agent",
@@ -306,6 +316,14 @@ def data_agent_node(state: InsightStateV2) -> Command[Literal["presentation", "r
         step["status"] = "success"
         print(f"[DataAgent] Completado: {len(payload.available_refs)} refs")
 
+        # MEMORIA: Crear resumen de los datos encontrados
+        data_summary = f"Datos encontrados: {len(payload.available_refs)} datasets"
+        if payload.kpis and payload.kpis.total_sales is not None:
+            data_summary += f", Ventas=${payload.kpis.total_sales:,.0f}"
+        if payload.kpis and payload.kpis.total_orders is not None:
+            data_summary += f", Órdenes={payload.kpis.total_orders}"
+        data_message = AIMessage(content=data_summary)
+
         # Determinar siguiente paso basado en routing_decision
         decision = state.get("routing_decision")
         needs_dashboard = decision.needs_dashboard if decision else True
@@ -315,6 +333,7 @@ def data_agent_node(state: InsightStateV2) -> Command[Literal["presentation", "r
             return Command(
                 goto="presentation",
                 update={
+                    "messages": [data_message],  # MEMORIA: add_messages reducer appends
                     "data_payload": payload,
                     "last_error": None,
                     "agent_steps": state.get("agent_steps", []) + [step]
@@ -326,6 +345,7 @@ def data_agent_node(state: InsightStateV2) -> Command[Literal["presentation", "r
             return Command(
                 goto=END,
                 update={
+                    "messages": [data_message],  # MEMORIA: add_messages reducer appends
                     "data_payload": payload,
                     "last_error": None,
                     "agent_steps": state.get("agent_steps", []) + [step]
@@ -353,10 +373,12 @@ def data_agent_node(state: InsightStateV2) -> Command[Literal["presentation", "r
             )
 
         # Max retries alcanzado - terminar con error
+        error_message = AIMessage(content=f"Error al procesar: {error_msg}")
         step["goto"] = "end"
         return Command(
             goto=END,
             update={
+                "messages": [error_message],  # MEMORIA: add_messages reducer appends
                 "error": f"Max retries ({max_retries}) exceeded: {error_msg}",
                 "agent_steps": state.get("agent_steps", []) + [step]
             }
@@ -393,6 +415,8 @@ def presentation_node(state: InsightStateV2) -> Command[Literal["__end__"]]:
     """
     Nodo PresentationAgent que genera el dashboard.
     Flujo Router-as-CEO: presentation → END
+
+    MEMORIA: Registra la conclusión/respuesta final en el historial.
     """
     step = {
         "node": "presentation",
@@ -419,9 +443,14 @@ def presentation_node(state: InsightStateV2) -> Command[Literal["__end__"]]:
         step["goto"] = "end"
         print(f"[Presentation] Dashboard: {spec.title}")
 
+        # MEMORIA: Agregar conclusión al historial
+        conclusion = spec.conclusion if spec.conclusion else spec.title
+        response_message = AIMessage(content=conclusion)
+
         return Command(
             goto=END,
             update={
+                "messages": [response_message],  # MEMORIA: add_messages reducer appends
                 "dashboard_spec": spec,
                 "agent_steps": state.get("agent_steps", []) + [step]
             }
@@ -433,9 +462,11 @@ def presentation_node(state: InsightStateV2) -> Command[Literal["__end__"]]:
         step["goto"] = "end"
         print(f"[Presentation] Error: {e}")
 
+        error_message = AIMessage(content=f"Error generando dashboard: {str(e)}")
         return Command(
             goto=END,
             update={
+                "messages": [error_message],  # MEMORIA: add_messages reducer appends
                 "error": f"Presentation error: {str(e)}",
                 "agent_steps": state.get("agent_steps", []) + [step]
             }
@@ -447,6 +478,8 @@ def direct_response_node(state: InsightStateV2) -> Command[Literal["__end__"]]:
     """
     Nodo para respuestas directas (conversacionales).
     Flujo Router-as-CEO: direct_response → END
+
+    MEMORIA: Registra la respuesta conversacional en el historial.
     """
     step = {
         "node": "direct_response",
@@ -469,11 +502,15 @@ def direct_response_node(state: InsightStateV2) -> Command[Literal["__end__"]]:
             )
         )
 
+        # MEMORIA: Agregar respuesta al historial
+        response_message = AIMessage(content=response)
+
         step["status"] = "success"
         step["goto"] = "end"
         return Command(
             goto=END,
             update={
+                "messages": [response_message],  # MEMORIA: add_messages reducer appends
                 "direct_response": response,
                 "dashboard_spec": spec,
                 "agent_steps": state.get("agent_steps", []) + [step]

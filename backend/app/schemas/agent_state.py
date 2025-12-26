@@ -1,16 +1,17 @@
 """
-Agent State Schemas - SQL-Agent v2 Architecture
+Agent State Schemas - SQL-Agent v2.5 Architecture
 
 Define los estados y tipos para el sistema multi-agente con:
 - Supervisor Pattern
 - Reflection/Auto-correction
 - Chain-of-Thought SQL Generation
+- Pydantic BaseModel para validación fuerte (LangGraph 2025)
 """
-from typing import TypedDict, Optional, List, Literal, Annotated, Any, TYPE_CHECKING
+from typing import Optional, List, Literal, Annotated, Any, TYPE_CHECKING, TypedDict
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from langgraph.graph.message import add_messages
 from langchain_core.messages import AnyMessage
 
@@ -143,51 +144,55 @@ class SQLAgentState(TypedDict):
     data_payload: Optional[DataPayload]
 
 
-class InsightStateV2(TypedDict):
+class InsightStateV2(BaseModel):
     """
-    Estado del grafo principal v2 con Supervisor Pattern.
+    Estado del grafo principal v2.5 con Supervisor Pattern.
+
+    Migrado a Pydantic BaseModel para validación fuerte (LangGraph 2025).
 
     Incluye:
     - Historial de mensajes con add_messages reducer
     - Campos para routing dinámico
     - Soporte para reflexión y corrección
     """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     # === Messages (con reducer para append automático) ===
-    messages: Annotated[List[AnyMessage], add_messages]
+    messages: Annotated[List[AnyMessage], add_messages] = Field(default_factory=list)
 
     # === Input ===
-    question: str
-    date_from: Optional[str]
-    date_to: Optional[str]
-    filters: Optional[dict]
+    question: str = Field(default="")
+    date_from: Optional[str] = Field(default=None)
+    date_to: Optional[str] = Field(default=None)
+    filters: Optional[dict] = Field(default=None)
 
     # === Routing ===
-    routing_decision: Optional[Any]  # RoutingDecision from intent_router
-    current_agent: Optional[str]
-    next_agent: Optional[str]
-    supervisor_decision: Optional[SupervisorDecision]
+    routing_decision: Optional[Any] = Field(default=None)  # RoutingDecision from intent_router
+    current_agent: Optional[str] = Field(default=None)
+    next_agent: Optional[str] = Field(default=None)
+    supervisor_decision: Optional[SupervisorDecision] = Field(default=None)
 
     # === SQL Agent State (subgrafo) ===
-    sql_output: Optional[SQLOutput]
-    execution_results: List[SQLExecutionResult]
-    retry_count: int
-    max_retries: int
-    current_error: Optional[str]
-    reflections: List[SQLReflection]
+    sql_output: Optional[SQLOutput] = Field(default=None)
+    execution_results: List[SQLExecutionResult] = Field(default_factory=list)
+    retry_count: int = Field(default=0)
+    max_retries: int = Field(default=3)
+    current_error: Optional[str] = Field(default=None)
+    reflections: List[SQLReflection] = Field(default_factory=list)
 
     # === Data ===
-    data_payload: Optional[DataPayload]
+    data_payload: Optional[DataPayload] = Field(default=None)
 
     # === Presentation ===
-    dashboard_spec: Optional[DashboardSpec]
-    direct_response: Optional[str]
+    dashboard_spec: Optional[DashboardSpec] = Field(default=None)
+    direct_response: Optional[str] = Field(default=None)
 
     # === Metadata ===
-    trace_id: Optional[str]
-    error: Optional[str]
-    started_at: Optional[str]
-    completed_at: Optional[str]
-    agent_steps: List[dict]  # Historial de pasos para observabilidad
+    trace_id: Optional[str] = Field(default=None)
+    error: Optional[str] = Field(default=None)
+    started_at: Optional[str] = Field(default=None)
+    completed_at: Optional[str] = Field(default=None)
+    agent_steps: List[dict] = Field(default_factory=list)  # Historial de pasos para observabilidad
 
 
 def create_initial_state(
@@ -196,34 +201,38 @@ def create_initial_state(
     date_to: Optional[str] = None,
     filters: Optional[dict] = None,
     trace_id: Optional[str] = None
-) -> InsightStateV2:
+) -> dict:
     """
     Factory para crear el estado inicial del grafo.
+
+    Retorna un dict compatible con LangGraph StateGraph.
+    El StateGraph usa InsightStateV2 (Pydantic) para validación,
+    pero los updates se hacen con dicts.
     """
     import uuid
 
-    return InsightStateV2(
-        messages=[],
-        question=question,
-        date_from=date_from,
-        date_to=date_to,
-        filters=filters,
-        routing_decision=None,
-        current_agent=None,
-        next_agent=None,
-        supervisor_decision=None,
-        sql_output=None,
-        execution_results=[],
-        retry_count=0,
-        max_retries=3,
-        current_error=None,
-        reflections=[],
-        data_payload=None,
-        dashboard_spec=None,
-        direct_response=None,
-        trace_id=trace_id or str(uuid.uuid4())[:8],
-        error=None,
-        started_at=datetime.utcnow().isoformat(),
-        completed_at=None,
-        agent_steps=[]
-    )
+    return {
+        "messages": [],
+        "question": question,
+        "date_from": date_from,
+        "date_to": date_to,
+        "filters": filters,
+        "routing_decision": None,
+        "current_agent": None,
+        "next_agent": None,
+        "supervisor_decision": None,
+        "sql_output": None,
+        "execution_results": [],
+        "retry_count": 0,
+        "max_retries": 3,
+        "current_error": None,
+        "reflections": [],
+        "data_payload": None,
+        "dashboard_spec": None,
+        "direct_response": None,
+        "trace_id": trace_id or str(uuid.uuid4())[:8],
+        "error": None,
+        "started_at": datetime.utcnow().isoformat(),
+        "completed_at": None,
+        "agent_steps": []
+    }

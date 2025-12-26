@@ -189,35 +189,10 @@ def get_llm(temperature: float = 0.1):
     )
 
 
-# ============== Estado Simplificado ==============
-
-class SupervisorState(TypedDict):
-    """Estado del grafo con Supervisor Pattern."""
-    # Input
-    question: str
-    date_from: Optional[str]
-    date_to: Optional[str]
-    filters: Optional[dict]
-
-    # Routing
-    routing_decision: Optional[RoutingDecision]
-
-    # Data Processing
-    data_payload: Optional[DataPayload]
-
-    # Reflection
-    retry_count: int
-    max_retries: int
-    last_error: Optional[str]
-
-    # Output
-    dashboard_spec: Optional[DashboardSpec]
-    direct_response: Optional[str]
-
-    # Metadata
-    trace_id: Optional[str]
-    error: Optional[str]
-    agent_steps: List[dict]
+# ============== Estado del Grafo (usando InsightStateV2 con memoria) ==============
+# NOTA: Se usa InsightStateV2 de schemas.agent_state que incluye:
+# - messages: Annotated[List[AnyMessage], add_messages] para memoria
+# - Todos los campos necesarios para routing, data, presentation
 
 
 # ============== Agentes Singleton ==============
@@ -243,7 +218,7 @@ def get_presentation_agent() -> PresentationAgent:
 # ============== Nodos del Grafo v2 (Router-as-CEO) ==============
 
 @traced("Router")
-def router_node(state: SupervisorState) -> Command[Literal["data_agent", "direct_response", "__end__"]]:
+def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "direct_response", "__end__"]]:
     """
     Nodo Router como CEO - decide Y ejecuta navegación directamente.
     Implementa el patrón Router-as-CEO de LangGraph 2025.
@@ -309,7 +284,7 @@ def router_node(state: SupervisorState) -> Command[Literal["data_agent", "direct
 
 
 @traced("DataAgent")
-def data_agent_node(state: SupervisorState) -> Command[Literal["presentation", "reflection", "__end__"]]:
+def data_agent_node(state: InsightStateV2) -> Command[Literal["presentation", "reflection", "__end__"]]:
     """
     Nodo DataAgent que ejecuta queries.
     Flujo Router-as-CEO: data_agent → presentation → END (o → END si data_only)
@@ -389,7 +364,7 @@ def data_agent_node(state: SupervisorState) -> Command[Literal["presentation", "
 
 
 @traced("Reflection")
-def reflection_node(state: SupervisorState) -> Command[Literal["data_agent"]]:
+def reflection_node(state: InsightStateV2) -> Command[Literal["data_agent"]]:
     """
     Nodo de Reflexión para analizar errores y autocorregir.
     """
@@ -414,7 +389,7 @@ def reflection_node(state: SupervisorState) -> Command[Literal["data_agent"]]:
 
 
 @traced("Presentation")
-def presentation_node(state: SupervisorState) -> Command[Literal["__end__"]]:
+def presentation_node(state: InsightStateV2) -> Command[Literal["__end__"]]:
     """
     Nodo PresentationAgent que genera el dashboard.
     Flujo Router-as-CEO: presentation → END
@@ -468,7 +443,7 @@ def presentation_node(state: SupervisorState) -> Command[Literal["__end__"]]:
 
 
 @traced("DirectResponse")
-def direct_response_node(state: SupervisorState) -> Command[Literal["__end__"]]:
+def direct_response_node(state: InsightStateV2) -> Command[Literal["__end__"]]:
     """
     Nodo para respuestas directas (conversacionales).
     Flujo Router-as-CEO: direct_response → END
@@ -532,7 +507,7 @@ def build_insight_graph_v2(checkpointer=None):
     Cada nodo usa Command objects para routing dinámico.
     No hay supervisor intermediario.
     """
-    workflow = StateGraph(SupervisorState)
+    workflow = StateGraph(InsightStateV2)
 
     # Agregar nodos (sin supervisor - Router es el CEO)
     workflow.add_node("router", router_node)
@@ -590,7 +565,7 @@ def run_insight_graph_v2(
     request: QueryRequest,
     trace_id: Optional[str] = None,
     thread_id: Optional[str] = None
-) -> SupervisorState:
+) -> InsightStateV2:
     """
     Ejecuta el grafo v2 de forma síncrona.
 
@@ -602,22 +577,14 @@ def run_insight_graph_v2(
     trace = trace_id or str(uuid.uuid4())[:8]
     thread = thread_id or f"thread-{trace}"
 
-    initial_state: SupervisorState = {
-        "question": request.question,
-        "date_from": request.date_from.isoformat() if request.date_from else None,
-        "date_to": request.date_to.isoformat() if request.date_to else None,
-        "filters": request.filters,
-        "routing_decision": None,
-        "data_payload": None,
-        "retry_count": 0,
-        "max_retries": 3,
-        "last_error": None,
-        "dashboard_spec": None,
-        "direct_response": None,
-        "trace_id": trace,
-        "error": None,
-        "agent_steps": []
-    }
+    # Usar factory function para crear estado con todos los campos requeridos
+    initial_state = create_initial_state(
+        question=request.question,
+        date_from=request.date_from.isoformat() if request.date_from else None,
+        date_to=request.date_to.isoformat() if request.date_to else None,
+        filters=request.filters,
+        trace_id=trace
+    )
 
     graph = get_insight_graph_v2()
     config = {
@@ -654,22 +621,14 @@ async def run_insight_graph_v2_streaming(
     trace = trace_id or str(uuid.uuid4())[:8]
     thread = thread_id or f"thread-{trace}"
 
-    initial_state: SupervisorState = {
-        "question": request.question,
-        "date_from": request.date_from.isoformat() if request.date_from else None,
-        "date_to": request.date_to.isoformat() if request.date_to else None,
-        "filters": request.filters,
-        "routing_decision": None,
-        "data_payload": None,
-        "retry_count": 0,
-        "max_retries": 3,
-        "last_error": None,
-        "dashboard_spec": None,
-        "direct_response": None,
-        "trace_id": trace,
-        "error": None,
-        "agent_steps": []
-    }
+    # Usar factory function para crear estado con memoria
+    initial_state = create_initial_state(
+        question=request.question,
+        date_from=request.date_from.isoformat() if request.date_from else None,
+        date_to=request.date_to.isoformat() if request.date_to else None,
+        filters=request.filters,
+        trace_id=trace
+    )
 
     # Evento: Inicio
     yield json.dumps({
@@ -750,7 +709,7 @@ def _get_node_message(node_name: str) -> str:
     return messages.get(node_name, f"⚙️ {node_name}...")
 
 
-def _build_result(state: SupervisorState) -> dict:
+def _build_result(state: InsightStateV2) -> dict:
     """Construye el resultado final para SSE."""
     spec = state.get("dashboard_spec")
     payload = state.get("data_payload")
@@ -782,7 +741,8 @@ run_insight_graph_streaming = run_insight_graph_v2_streaming
 get_insight_graph = get_insight_graph_v2
 
 # Legacy state type alias
-InsightState = SupervisorState
+# Legacy alias - ahora usa InsightStateV2 con memoria
+InsightState = InsightStateV2
 
 __all__ = [
     # Primary v2 exports

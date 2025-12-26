@@ -45,12 +45,38 @@ async def lifespan(app: FastAPI):
     # Startup
     print("Starting SQL-Agent Backend...")
 
-    # Test DB connection
+    # Test DB connection (REST API client)
     db = get_db_client()
     if db.test_connection():
         print("Database connection: OK")
     else:
         print("Database connection: FAILED (queries may not work)")
+
+    # Initialize robust psycopg pool for Supabase Transaction Mode
+    # prepare_threshold=None es CRÍTICO para PgBouncer/Supavisor
+    app.state.pool = None
+    db_uri = os.getenv("DB_URI") or os.getenv("POSTGRES_URL")
+    if db_uri:
+        try:
+            from psycopg_pool import AsyncConnectionPool
+            from psycopg.rows import dict_row
+
+            pool = AsyncConnectionPool(
+                conninfo=db_uri,
+                min_size=1,
+                max_size=10,
+                open=False,
+                kwargs={
+                    "autocommit": True,
+                    "row_factory": dict_row,
+                    "prepare_threshold": None  # CRÍTICO: Desactiva prepared statements para PgBouncer
+                }
+            )
+            await pool.open()
+            app.state.pool = pool
+            print("PostgreSQL pool: Initialized (prepare_threshold=None)")
+        except Exception as e:
+            print(f"PostgreSQL pool: Not available ({e})")
 
     # Initialize checkpointer for LangGraph persistence
     checkpointer_manager = await init_checkpointer()
@@ -80,6 +106,15 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("Shutting down SQL-Agent Backend...")
+
+    # Close PostgreSQL pool if exists
+    if app.state.pool:
+        try:
+            await app.state.pool.close()
+            print("PostgreSQL pool: Closed")
+        except Exception as e:
+            print(f"PostgreSQL pool close error: {e}")
+
     await close_checkpointer()
 
 

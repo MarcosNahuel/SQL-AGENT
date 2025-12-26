@@ -451,10 +451,33 @@ class IntentRouter:
 
     def _route_with_llm(self, question: str) -> RoutingDecision:
         """
-        Usa LLM para clasificación semántica cuando las heurísticas no son claras.
-        Ahora puede decidir pedir clarificación si la pregunta es ambigua.
+        Usa LLM con .with_structured_output() para clasificación semántica.
+        Modernizado para LangGraph 2025 - garantiza JSON válido sin parsing manual.
         """
-        import json
+        # Modelo interno para structured output
+        class RouterOutput(BaseModel):
+            """Salida estructurada del router"""
+            response_type: Literal["dashboard", "data_only", "conversational", "clarification"] = Field(
+                description="Tipo de respuesta requerida"
+            )
+            domain: Literal["sales", "inventory", "conversations"] = Field(
+                description="Dominio de la consulta"
+            )
+            reasoning: str = Field(
+                description="Justificación breve de la clasificación"
+            )
+            clarification_question: Optional[str] = Field(
+                default=None,
+                description="Pregunta de clarificación si response_type es 'clarification'"
+            )
+            clarification_options: Optional[List[str]] = Field(
+                default=None,
+                description="Opciones sugeridas si se requiere clarificación"
+            )
+            understood_context: Optional[str] = Field(
+                default=None,
+                description="Lo que se entendió de la pregunta original"
+            )
 
         system_prompt = """Eres un clasificador de intenciones para un sistema de analytics de e-commerce.
 Analiza la pregunta del usuario y determina:
@@ -464,47 +487,30 @@ Analiza la pregunta del usuario y determina:
    - "conversational" (saludo/ayuda/pregunta general)
    - "clarification" (la pregunta es ambigua y necesitas más contexto)
 2. domain: "sales" (ventas/órdenes), "inventory" (productos/stock), "conversations" (agente AI/escalados)
-3. Si response_type es "clarification", incluye:
-   - clarification_question: pregunta concisa para el usuario
-   - clarification_options: lista de 2-4 opciones sugeridas
-   - understood_context: qué entendiste de la pregunta original
+3. reasoning: justificación breve de tu decisión
 
 IMPORTANTE: Usa "clarification" solo cuando:
 - La pregunta es muy vaga o corta (ej: "datos", "mostrame")
 - Falta contexto crítico (periodo, dominio, métrica específica)
-- Hay múltiples interpretaciones válidas
-
-Responde SOLO con JSON válido:
-{"response_type": "...", "domain": "...", "reasoning": "...", "clarification_question": "...", "clarification_options": [...], "understood_context": "..."}"""
+- Hay múltiples interpretaciones válidas"""
 
         try:
-            response = self.llm.invoke([
+            # Usar structured output - garantiza JSON válido sin parsing manual
+            structured_llm = self.llm.with_structured_output(RouterOutput)
+            result: RouterOutput = structured_llm.invoke([
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=f"Pregunta: {question}")
             ])
 
-            content = str(response.content).strip()
-            # Intentar parsear JSON
-            if "```" in content:
-                match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
-                if match:
-                    content = match.group(1).strip()
+            print(f"[IntentRouter] LLM structured output: type={result.response_type}, domain={result.domain}")
 
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                content = json_match.group(0)
-
-            data = json.loads(content)
-            resp_type = data.get("response_type", "dashboard")
-            domain = data.get("domain", "sales")
-
-            if resp_type == "clarification":
+            # Mapear resultado a RoutingDecision
+            if result.response_type == "clarification":
                 clarification = ClarificationData(
-                    question=data.get("clarification_question", "Podrias ser mas especifico?"),
-                    options=data.get("clarification_options", ["Ventas", "Inventario", "Agente AI"]),
-                    understood_context=data.get("understood_context", "")
+                    question=result.clarification_question or "Podrias ser mas especifico?",
+                    options=result.clarification_options or ["Ventas", "Inventario", "Agente AI"],
+                    understood_context=result.understood_context or ""
                 )
-                print(f"[IntentRouter] LLM decided clarification: {clarification.question}")
                 return RoutingDecision(
                     response_type=ResponseType.CLARIFICATION,
                     needs_sql=False,
@@ -512,28 +518,28 @@ Responde SOLO con JSON válido:
                     needs_narrative=False,
                     clarification=clarification,
                     direct_response=f"{clarification.understood_context}\n\n{clarification.question}" if clarification.understood_context else clarification.question,
-                    confidence=0.75,
-                    reasoning=f"LLM semantic clarification: {data.get('reasoning', 'N/A')}"
+                    confidence=0.8,
+                    reasoning=f"LLM structured: {result.reasoning}"
                 )
-            elif resp_type == "conversational":
+            elif result.response_type == "conversational":
                 return RoutingDecision(
                     response_type=ResponseType.CONVERSATIONAL,
                     needs_sql=False,
                     needs_dashboard=False,
                     needs_narrative=False,
                     direct_response=self.DIRECT_RESPONSES.get("help", ""),
-                    confidence=0.8,
-                    reasoning=f"LLM semantic: {data.get('reasoning', 'N/A')}"
+                    confidence=0.85,
+                    reasoning=f"LLM structured: {result.reasoning}"
                 )
-            elif resp_type == "data_only":
+            elif result.response_type == "data_only":
                 return RoutingDecision(
                     response_type=ResponseType.DATA_ONLY,
                     needs_sql=True,
                     needs_dashboard=False,
                     needs_narrative=True,
-                    domain=domain,
-                    confidence=0.8,
-                    reasoning=f"LLM semantic: {data.get('reasoning', 'N/A')}"
+                    domain=result.domain,
+                    confidence=0.85,
+                    reasoning=f"LLM structured: {result.reasoning}"
                 )
             else:  # dashboard
                 return RoutingDecision(
@@ -541,13 +547,13 @@ Responde SOLO con JSON válido:
                     needs_sql=True,
                     needs_dashboard=True,
                     needs_narrative=True,
-                    domain=domain,
-                    confidence=0.8,
-                    reasoning=f"LLM semantic: {data.get('reasoning', 'N/A')}"
+                    domain=result.domain,
+                    confidence=0.85,
+                    reasoning=f"LLM structured: {result.reasoning}"
                 )
 
         except Exception as e:
-            print(f"[IntentRouter] LLM fallback error: {e}")
+            print(f"[IntentRouter] LLM structured output error: {e}")
             # Fallback seguro a dashboard con dominio sales
             return RoutingDecision(
                 response_type=ResponseType.DASHBOARD,

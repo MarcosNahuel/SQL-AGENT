@@ -15,6 +15,7 @@ class QueryRequest(BaseModel):
     date_from: Optional[date] = Field(None, description="Fecha inicio del rango")
     date_to: Optional[date] = Field(None, description="Fecha fin del rango")
     filters: Optional[dict] = Field(default_factory=dict, description="Filtros adicionales")
+    chat_context: Optional[str] = Field(None, description="Historial de conversación para contexto")
 
 
 class QueryPlan(BaseModel):

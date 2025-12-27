@@ -163,6 +163,7 @@ class InsightStateV2(TypedDict, total=False):
     date_from: Optional[str]
     date_to: Optional[str]
     filters: Optional[dict]
+    chat_context: Optional[str]  # Historial de conversación para contexto
 
     # === Routing ===
     routing_decision: Optional[Any]  # RoutingDecision from intent_router
@@ -199,7 +200,8 @@ def create_initial_state(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     filters: Optional[dict] = None,
-    trace_id: Optional[str] = None
+    trace_id: Optional[str] = None,
+    chat_context: Optional[str] = None
 ) -> dict:
     """
     Factory para crear el estado inicial del grafo.
@@ -216,6 +218,7 @@ def create_initial_state(
         "date_from": date_from,
         "date_to": date_to,
         "filters": filters,
+        "chat_context": chat_context,  # Contexto de conversación
         "routing_decision": None,
         "current_agent": None,
         "next_agent": None,

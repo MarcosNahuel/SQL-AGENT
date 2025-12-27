@@ -231,6 +231,7 @@ def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "handle_
     - CLARIFICATION → clarification_agent (LLM-based dynamic clarification)
     - DATA_ONLY/DASHBOARD → data_agent
     """
+    print(f"[router_node] INICIANDO para: {state.get('question', '')[:50]}", file=sys.stderr, flush=True)
     step = {
         "node": "router",
         "timestamp": datetime.utcnow().isoformat(),
@@ -240,8 +241,11 @@ def router_node(state: InsightStateV2) -> Command[Literal["data_agent", "handle_
     user_message = HumanMessage(content=state["question"])
 
     try:
+        print(f"[router_node] Obteniendo IntentRouter...", file=sys.stderr, flush=True)
         router = get_intent_router()
+        print(f"[router_node] Llamando a router.route()...", file=sys.stderr, flush=True)
         decision = router.route(state["question"])
+        print(f"[router_node] Decisión recibida: {decision.response_type.value}", file=sys.stderr, flush=True)
         step["response_type"] = decision.response_type.value
         step["domain"] = decision.domain
 
@@ -323,7 +327,8 @@ def data_agent_node(state: InsightStateV2) -> Command[Literal["presentation", "r
         payload = agent.run(
             question=state["question"],
             date_from=state.get("date_from"),
-            date_to=state.get("date_to")
+            date_to=state.get("date_to"),
+            chat_context=state.get("chat_context")  # Contexto de conversación
         )
 
         step["refs_count"] = len(payload.available_refs)
@@ -449,7 +454,8 @@ def presentation_node(state: InsightStateV2) -> Command[Literal["__end__"]]:
         agent = get_presentation_agent()
         spec = agent.run(
             question=state["question"],
-            payload=state["data_payload"]
+            payload=state["data_payload"],
+            chat_context=state.get("chat_context")  # Pasar contexto de conversación
         )
 
         step["status"] = "success"
@@ -757,7 +763,8 @@ def run_insight_graph_v2(
         date_from=request.date_from.isoformat() if request.date_from else None,
         date_to=request.date_to.isoformat() if request.date_to else None,
         filters=request.filters,
-        trace_id=trace
+        trace_id=trace,
+        chat_context=request.chat_context  # Contexto de conversación
     )
 
     graph = get_insight_graph_v2()
@@ -795,13 +802,14 @@ async def run_insight_graph_v2_streaming(
     trace = trace_id or str(uuid.uuid4())[:8]
     thread = thread_id or f"thread-{trace}"
 
-    # Usar factory function para crear estado con memoria
+    # Usar factory function para crear estado con memoria y contexto
     initial_state = create_initial_state(
         question=request.question,
         date_from=request.date_from.isoformat() if request.date_from else None,
         date_to=request.date_to.isoformat() if request.date_to else None,
         filters=request.filters,
-        trace_id=trace
+        trace_id=trace,
+        chat_context=request.chat_context  # Contexto de conversación
     )
 
     # Evento: Inicio

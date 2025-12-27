@@ -8,6 +8,7 @@ Responsabilidades:
 - Validar que todos los refs existan en el payload
 """
 import os
+import sys
 import json
 import time
 from typing import Optional, List, Callable, Any
@@ -30,6 +31,7 @@ from ..schemas.dashboard import (
 )
 from ..schemas.intent import NarrativeOutput
 from ..prompts.ultrathink import get_narrative_prompt
+from ..sql.schema_docs import BUSINESS_CONTEXT
 
 
 def retry_with_backoff(max_retries: int = 3, base_delay: float = 2.0, max_delay: float = 60.0):
@@ -641,19 +643,22 @@ class PresentationAgent:
         """Wrapper para modo demo - usa smart narrative"""
         return self._generate_smart_narrative(payload)
 
-    def generate_narrative(self, question: str, payload: DataPayload) -> tuple[List[NarrativeConfig], str]:
+    def _generate_contextual_narrative(
+        self,
+        question: str,
+        payload: DataPayload,
+        chat_context: Optional[str] = None
+    ) -> tuple[List[NarrativeConfig], str]:
         """
-        Usa el LLM con .with_structured_output() para generar narrativa.
-        Garantiza JSON válido sin parsers manuales (2025 standard).
+        Genera narrativas usando LLM con CONTEXTO COMPLETO:
+        - La pregunta del usuario
+        - El historial de chat (si existe)
+        - La documentación del negocio (BUSINESS_CONTEXT)
+        - Los datos obtenidos de SQL
 
-        Returns:
-            Tuple de (narrativas, conclusion) para evitar estado compartido.
+        Este método produce insights más naturales y menos determinísticos
+        que _generate_smart_narrative().
         """
-        # Check for demo mode - skip LLM call
-        if os.getenv("DEMO_MODE", "false").lower() == "true":
-            narratives = self._generate_demo_narrative(payload)
-            return narratives, ""
-
         # Preparar resumen de datos para el LLM
         data_summary = []
 
@@ -666,12 +671,14 @@ class PresentationAgent:
                 kpi_parts.append(f"Ordenes={kpis.total_orders}")
             if kpis.avg_order_value is not None:
                 kpi_parts.append(f"Ticket Promedio=${kpis.avg_order_value:,.2f}")
+            if kpis.total_units is not None:
+                kpi_parts.append(f"Unidades={kpis.total_units}")
             if kpis.total_interactions is not None:
                 kpi_parts.append(f"Interacciones AI={kpis.total_interactions}")
             if kpis.escalation_rate is not None:
                 kpi_parts.append(f"Tasa Escalamiento={kpis.escalation_rate:.1f}%")
-            if kpis.total_queries is not None:
-                kpi_parts.append(f"Consultas Preventa={kpis.total_queries}")
+            if kpis.critical_count is not None:
+                kpi_parts.append(f"Stock Crítico={kpis.critical_count}")
             if kpi_parts:
                 data_summary.append(f"KPIs: {', '.join(kpi_parts)}")
 
@@ -681,45 +688,77 @@ class PresentationAgent:
                     first_val = ts.points[0].value if ts.points else 0
                     last_val = ts.points[-1].value if ts.points else 0
                     change = ((last_val - first_val) / first_val * 100) if first_val else 0
-                    data_summary.append(f"Serie {ts.series_name}: {len(ts.points)} puntos, "
-                                      f"cambio {change:+.1f}%")
+                    first_date = ts.points[0].date if ts.points else "N/A"
+                    last_date = ts.points[-1].date if ts.points else "N/A"
+                    data_summary.append(
+                        f"Serie {ts.series_name}: {len(ts.points)} puntos ({first_date} a {last_date}), "
+                        f"cambio {change:+.1f}%"
+                    )
 
         if payload.top_items:
             for top in payload.top_items:
                 if top.items:
-                    top_item = top.items[0]
-                    data_summary.append(f"Top {top.ranking_name}: #1 es '{top_item.title}' "
-                                      f"con ${top_item.value:,.2f}")
+                    top_3 = top.items[:3]
+                    items_text = ", ".join([f"#{i+1} '{item.title[:30]}' (${item.value:,.0f})" for i, item in enumerate(top_3)])
+                    data_summary.append(f"Top {top.ranking_name}: {items_text}")
 
-        # Prompt simplificado - structured output maneja el formato
-        system_prompt = """Eres un analista de datos experto en e-commerce para MercadoLibre Argentina.
-Genera insights profesionales basados en los datos proporcionados.
+        # Construir el prompt con contexto completo
+        system_prompt = f"""Eres un analista de datos experto para una tienda de e-commerce en MercadoLibre Argentina.
 
-Tu respuesta debe incluir:
-- conclusion: Respuesta directa y concisa a la pregunta (1-2 oraciones)
-- summary: Resumen ejecutivo del análisis (2-3 oraciones)
-- insights: Lista de 2-4 insights analíticos accionables
-- recommendation: Una recomendación accionable basada en los datos"""
+## CONTEXTO DEL NEGOCIO
+{BUSINESS_CONTEXT}
 
-        user_msg = f"""Pregunta del usuario: "{question}"
+## TU TAREA
+Genera insights PERSONALIZADOS y ACCIONABLES basados en los datos.
+NO uses templates genéricos. Analiza los datos específicos y genera observaciones únicas.
 
-Datos disponibles:
-{chr(10).join(data_summary)}
+## REGLAS
+1. Responde SIEMPRE en español
+2. Cada insight debe mencionar NÚMEROS ESPECÍFICOS del dataset
+3. Relaciona los datos con el CONTEXTO DEL NEGOCIO
+4. La conclusión debe responder DIRECTAMENTE a la pregunta del usuario
+5. La recomendación debe ser ESPECÍFICA, no genérica
+6. Si hay tendencia temporal, calcula y menciona el % de cambio
+7. Identifica anomalías, picos, o patrones inusuales
+8. Considera el contexto de la conversación si existe
 
-Genera el análisis."""
+## FORMATO DE RESPUESTA (JSON puro)
+{{
+  "conclusion": "Respuesta directa a la pregunta en 1-2 frases",
+  "summary": "Resumen ejecutivo con los 2-3 datos más importantes",
+  "insights": [
+    "Insight específico con número + interpretación del negocio",
+    "Insight de tendencia o comparación con porcentaje",
+    "Insight de anomalía o patrón detectado"
+  ],
+  "recommendation": "Acción específica: [verbo imperativo] + [qué cosa] + [para lograr qué resultado]"
+}}"""
+
+        # Construir mensaje del usuario con contexto de conversación
+        user_msg_parts = [f'Pregunta del usuario: "{question}"']
+
+        if chat_context:
+            user_msg_parts.append(f"\n## CONTEXTO DE CONVERSACIÓN ANTERIOR\n{chat_context}")
+
+        user_msg_parts.append(f"\n## DATOS DISPONIBLES\n{chr(10).join(data_summary)}")
+        user_msg_parts.append("\nGenera el análisis personalizado.")
+
+        user_msg = "\n".join(user_msg_parts)
 
         try:
-            # Usar structured output - garantiza NarrativeOutput válido sin parsing manual
+            print(f"[PresentationAgent] Generando narrativa contextual con LLM...", file=sys.stderr, flush=True)
+
+            # Usar structured output para garantizar JSON válido
             output: NarrativeOutput = self._invoke_structured([
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_msg)
             ])
 
-            print(f"[PresentationAgent] Narrativa generada (structured output)")
+            print(f"[PresentationAgent] Narrativa contextual generada exitosamente", file=sys.stderr, flush=True)
 
             narratives = []
 
-            # Conclusion directa (respuesta a la pregunta) - PRIMERO
+            # Conclusión directa (respuesta a la pregunta) - PRIMERO
             if output.conclusion:
                 narratives.append(NarrativeConfig(
                     type="headline",
@@ -740,7 +779,7 @@ Genera el análisis."""
                     text=insight
                 ))
 
-            # Recomendacion accionable
+            # Recomendación accionable
             if output.recommendation:
                 narratives.append(NarrativeConfig(
                     type="callout",
@@ -750,11 +789,52 @@ Genera el análisis."""
             return narratives, output.conclusion
 
         except Exception as e:
-            print(f"[PresentationAgent] Structured output error, using fallback: {e}")
-            # Usar analisis inteligente sin LLM como fallback
+            print(f"[PresentationAgent] Error en narrativa contextual, fallback a smart: {e}", file=sys.stderr, flush=True)
+            # Fallback a narrativa inteligente sin LLM
             narratives = self._generate_smart_narrative(payload)
             conclusion = self._generate_quick_conclusion(question, payload)
             return narratives, conclusion
+
+    def generate_narrative(
+        self,
+        question: str,
+        payload: DataPayload,
+        chat_context: Optional[str] = None
+    ) -> tuple[List[NarrativeConfig], str]:
+        """
+        Genera narrativa usando heurísticas o LLM contextual.
+
+        Modos:
+        - PRESENTATION_USE_LLM=false (default): Heurísticas rápidas (0ms)
+        - PRESENTATION_USE_LLM=true: LLM con contexto completo (más lento pero mejor)
+
+        Args:
+            question: Pregunta del usuario
+            payload: Datos obtenidos de SQL
+            chat_context: Historial de conversación (opcional)
+
+        Returns:
+            Tuple de (narrativas, conclusion) para evitar estado compartido.
+        """
+        use_llm = os.getenv("PRESENTATION_USE_LLM", "false").lower() == "true"
+
+        # Demo mode siempre usa heurísticas
+        if os.getenv("DEMO_MODE", "false").lower() == "true":
+            print(f"[PresentationAgent] Modo demo: usando smart narrative", file=sys.stderr, flush=True)
+            narratives = self._generate_smart_narrative(payload)
+            conclusion = self._generate_quick_conclusion(question, payload)
+            return narratives, conclusion
+
+        # Si LLM está habilitado, usar narrativa contextual con todo el contexto
+        if use_llm:
+            print(f"[PresentationAgent] LLM habilitado: usando narrativa contextual", file=sys.stderr, flush=True)
+            return self._generate_contextual_narrative(question, payload, chat_context)
+
+        # Default: heurísticas rápidas (sin LLM)
+        print(f"[PresentationAgent] Usando smart narrative (sin LLM) para latencia ultra-baja", file=sys.stderr, flush=True)
+        narratives = self._generate_smart_narrative(payload)
+        conclusion = self._generate_quick_conclusion(question, payload)
+        return narratives, conclusion
 
     def validate_refs(self, spec: DashboardSpec, available_refs: List[str]) -> DashboardSpec:
         """
@@ -780,22 +860,32 @@ Genera el análisis."""
 
         return spec
 
-    def run(self, question: str, payload: DataPayload) -> DashboardSpec:
+    def run(
+        self,
+        question: str,
+        payload: DataPayload,
+        chat_context: Optional[str] = None
+    ) -> DashboardSpec:
         """
         Entry point principal del PresentationAgent.
         1. Construye el spec con heuristicas
-        2. Genera narrativa con LLM (ULTRATHINK)
+        2. Genera narrativa (LLM contextual o heurísticas)
         3. Valida refs
         4. Asegura minimo 2 graficos
         5. Retorna spec final con conclusion
+
+        Args:
+            question: Pregunta del usuario
+            payload: Datos obtenidos de SQL
+            chat_context: Historial de conversación para contexto (opcional)
         """
         # Paso 1: Construir spec
         spec = self._build_spec_heuristic(question, payload)
         print(f"[PresentationAgent] Spec base generado: {len(spec.slots.series)} KPIs, "
               f"{len(spec.slots.charts)} charts")
 
-        # Paso 2: Generar narrativa con ULTRATHINK (retorna tupla para evitar race condition)
-        narratives, conclusion = self.generate_narrative(question, payload)
+        # Paso 2: Generar narrativa (con contexto si está disponible)
+        narratives, conclusion = self.generate_narrative(question, payload, chat_context)
         spec.slots.narrative = narratives
         print(f"[PresentationAgent] Narrativa generada: {len(narratives)} bloques")
 

@@ -100,6 +100,11 @@ async def generate_ai_sdk_stream(
     thread_id = conversation_id or f"thread-{trace_id}"
     chat_memory = get_chat_memory(thread_id, user_id)
 
+    # IMPORTANTE: Cargar historial de conversación para contexto
+    chat_memory.load_history_sync(limit=10)
+    chat_context = chat_memory.get_context_string(max_messages=5)
+    _logger.info(trace_id, f"Chat context loaded: {len(chat_context)} chars")
+
     # 1. Start message
     yield emit_sse("start", {"messageId": message_id})
 
@@ -127,12 +132,13 @@ async def generate_ai_sdk_stream(
         "detail": {"date_from": date_from, "date_to": date_to}
     })
 
-    # Create query request for LangGraph with extracted dates
+    # Create query request for LangGraph with extracted dates AND chat context
     query_request = QueryRequest(
         question=question,
         date_from=date_from,
         date_to=date_to,
-        filters={}
+        filters={},
+        chat_context=chat_context if chat_context else None
     )
 
     # Track accumulated narrative for progressive streaming

@@ -123,12 +123,15 @@ class IntentRouter:
         "aumentar stock", "aumentar inventario", "ponderar",
         "debo hacer", "deberia", "debería", "recomienda", "sugieres",
         "enero", "febrero", "marzo", "abril", "mayo", "junio",
-        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+        # Por periodo (requieren gráficos temporales)
+        "por mes", "por dia", "por semana", "por año",
+        "mensual", "diario", "semanal", "anual"
     ]
 
-    # Dominios de datos
+    # Dominios de datos (evitar substrings como "venta" en "inventario")
     DOMAIN_KEYWORDS = {
-        "sales": ["venta", "vendido", "orden", "pedido", "factura", "ingreso", "revenue"],
+        "sales": ["ventas", "vendido", "vendimos", "orden", "pedido", "factura", "ingreso", "revenue"],
         "inventory": ["producto", "inventario", "stock", "disponible"],
         "conversations": ["agente", "ai", "bot", "interaccion", "conversacion", "mensaje"],
         "escalations": ["escalado", "escalacion", "caso", "soporte", "ticket"],
@@ -174,7 +177,7 @@ class IntentRouter:
                 model=os.getenv("OPENROUTER_MODEL", "google/gemini-3-flash-preview"),
                 openai_api_key=openrouter_key,
                 openai_api_base="https://openrouter.ai/api/v1",
-                temperature=0.1,
+                temperature=0.3,  # Temperatura moderada para variedad
                 default_headers={
                     "HTTP-Referer": "https://sql-agent.local",
                     "X-Title": "SQL-Agent-Router"
@@ -184,7 +187,7 @@ class IntentRouter:
             self.llm = ChatGoogleGenerativeAI(
                 model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
                 google_api_key=os.getenv("GEMINI_API_KEY"),
-                temperature=0.1
+                temperature=0.3  # Temperatura moderada para variedad
             )
 
     def route(self, question: str) -> RoutingDecision:
@@ -197,6 +200,10 @@ class IntentRouter:
         Returns:
             RoutingDecision con la decision de routing
         """
+        import time
+        start = time.time()
+        print(f"[IntentRouter.route] INICIO para: {question[:50]}", flush=True)
+
         q_lower = question.lower().strip()
 
         # Paso 1: Verificar patrones conversacionales
@@ -244,8 +251,11 @@ class IntentRouter:
         # Paso 7: Determinar tipo de respuesta
         if not needs_data and not needs_dashboard:
             # No hay keywords claros - usar LLM para clasificación semántica
-            print(f"[IntentRouter] No clear keywords, using LLM semantic routing...")
+            print(f"[IntentRouter] No clear keywords, using LLM semantic routing...", flush=True)
             return self._route_with_llm(question)
+
+        elapsed = time.time() - start
+        print(f"[IntentRouter.route] FIN heurísticas en {elapsed:.2f}s - needs_data={needs_data}, needs_dashboard={needs_dashboard}", flush=True)
 
         if needs_dashboard:
             return RoutingDecision(

@@ -90,7 +90,7 @@ class DataAgent:
         self.llm_gemini = ChatGoogleGenerativeAI(
             model=os.getenv("GEMINI_MODEL", "gemini-3-flash-preview"),
             google_api_key=os.getenv("GEMINI_API_KEY"),
-            temperature=0.1  # Baja temperatura para decisiones deterministicas
+            temperature=0.3  # Temperatura moderada para variedad en respuestas
         )
 
         # LLM OpenRouter (primario si USE_OPENROUTER_PRIMARY=true)
@@ -100,7 +100,7 @@ class DataAgent:
                 model=os.getenv("OPENROUTER_MODEL", "google/gemini-3-flash-preview"),
                 openai_api_key=openrouter_key,
                 openai_api_base="https://openrouter.ai/api/v1",
-                temperature=0.1,
+                temperature=0.3,  # Temperatura moderada para variedad
                 default_headers={
                     "HTTP-Referer": "https://sql-agent.local",
                     "X-Title": "SQL-Agent"
@@ -215,7 +215,19 @@ class DataAgent:
         elif any(kw in q_lower for kw in ["mas vendido", "más vendido", "mas vendidos", "más vendidos", "top producto", "top productos", "mejores producto", "mejores productos"]):
             query_ids = ["kpi_sales_summary", "top_products_by_revenue", "sales_by_month"]
 
-        # Ventas / Revenue
+        # IMPORTANTE: Inventario ANTES de Ventas porque "inventario" contiene "venta" como substring!
+        # Inventario / Stock - INCLUIR stock_reorder_analysis para gráficos
+        elif any(kw in q_lower for kw in ["inventario", "stock", "existencia"]):
+            if any(kw in q_lower for kw in ["bajo", "alerta", "falta", "critico", "crítico"]):
+                query_ids = ["kpi_inventory_summary", "products_low_stock", "stock_reorder_analysis"]
+            else:
+                query_ids = ["kpi_inventory_summary", "stock_reorder_analysis", "stock_alerts"]
+
+        # Productos (generico, sin "vendido") - INCLUIR top_products_by_sales para gráficos
+        elif "producto" in q_lower and not any(kw in q_lower for kw in ["vendido", "venta", "revenue"]):
+            query_ids = ["kpi_inventory_summary", "products_inventory", "top_products_by_sales"]
+
+        # Ventas / Revenue (DESPUES de inventario)
         elif any(kw in q_lower for kw in ["venta", "factura", "ingreso", "revenue", "vendido", "vendieron", "facturado"]):
             query_ids = ["kpi_sales_summary", "ts_sales_by_day", "top_products_by_revenue"]
 
@@ -227,42 +239,55 @@ class DataAgent:
         elif any(kw in q_lower for kw in ["aumentar stock", "aumentar inventario", "ponderar", "priorizar", "debo comprar"]):
             query_ids = ["kpi_sales_summary", "stock_reorder_analysis", "ts_top_product_sales", "products_low_stock"]
 
-        # Inventario / Stock (sin "vendido") - INCLUIR stock_reorder_analysis para gráficos
-        elif any(kw in q_lower for kw in ["inventario", "stock", "existencia"]):
-            if any(kw in q_lower for kw in ["bajo", "alerta", "falta", "critico", "crítico"]):
-                query_ids = ["kpi_inventory_summary", "products_low_stock", "stock_reorder_analysis"]
-            else:
-                query_ids = ["kpi_inventory_summary", "stock_reorder_analysis", "stock_alerts"]
-
-        # Productos (generico, sin "vendido") - INCLUIR top_products_by_sales para gráficos
-        elif "producto" in q_lower and not any(kw in q_lower for kw in ["vendido", "venta", "revenue"]):
-            query_ids = ["kpi_inventory_summary", "products_inventory", "top_products_by_sales"]
-
         # Preventa
         elif any(kw in q_lower for kw in ["preventa", "consulta", "pregunta"]):
             query_ids = ["preventa_summary", "recent_preventa_queries"]
 
-        # Default: mostrar KPIs de ventas
+        # Default: mostrar KPIs + tendencias + top items para mayor variedad
         else:
-            query_ids = ["kpi_sales_summary", "recent_orders"]
+            query_ids = ["kpi_sales_summary", "ts_sales_by_day", "top_products_by_revenue"]
 
         import sys
         print(f"[DataAgent] Heuristic selected: {query_ids}", file=sys.stderr)
         return QueryPlan(query_ids=query_ids, params={})
 
-    def decide_queries(self, question: str, date_from: Optional[str], date_to: Optional[str]) -> QueryPlan:
+    def decide_queries(self, question: str, date_from: Optional[str], date_to: Optional[str], chat_context: Optional[str] = None) -> QueryPlan:
         """
-        Usa el LLM con .with_structured_output() para decidir queries.
-        Garantiza JSON válido sin parsers manuales (2025 standard).
+        Decide queries usando heurísticas primero (rápido).
+        Solo usa LLM cuando hay referencias ambiguas que requieren contexto.
         """
-        # Usar heuristics como fallback rapido si LLM deshabilitado
         use_llm = os.getenv("DATA_AGENT_USE_LLM", "true").lower() == "true"
+        q_lower = question.lower()
+
+        # OPTIMIZACIÓN: SIEMPRE usar heurísticas si hay keywords claros
+        # Independientemente del chat_context - el LLM es muy lento
+        has_clear_keywords = any(kw in q_lower for kw in [
+            "inventario", "stock", "venta", "ventas", "producto", "orden", "ordenes",
+            "agente", "escalado", "preventa", "kpi", "resumen", "dashboard",
+            "vendido", "facturado", "revenue", "ingresos", "ticket",
+            "enero", "febrero", "marzo", "abril", "mayo", "junio",
+            "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+            "mes", "semana", "dia", "año", "hoy", "ayer", "ultimos", "reciente"
+        ])
+
+        # Detectar si hay referencias ambiguas que REQUIEREN contexto de chat
+        has_ambiguous_refs = any(ref in q_lower for ref in [
+            "eso", "esto", "aquello", "lo mismo", "esos datos", "lo anterior",
+            "mas de eso", "y de eso", "que mas", "amplia", "detalla"
+        ])
+
+        # Si hay keywords claros Y no hay referencias ambiguas, usar heurísticas SIEMPRE
+        if has_clear_keywords and not has_ambiguous_refs:
+            print(f"[DataAgent] Keywords claros detectados, usando heurísticas rápidas (bypass LLM)", file=sys.stderr, flush=True)
+            return self._decide_queries_heuristic(question)
 
         if not use_llm:
             print(f"[DataAgent] LLM disabled, usando heuristicas para: {question[:50]}", file=sys.stderr, flush=True)
             return self._decide_queries_heuristic(question)
 
         print(f"[DataAgent] LLM structured output para: {question[:50]}", file=sys.stderr, flush=True)
+        if chat_context:
+            print(f"[DataAgent] Usando contexto de conversación: {len(chat_context)} chars", file=sys.stderr, flush=True)
 
         available = get_available_queries()
         queries_list = "\n".join([f"- {qid}: {desc}" for qid, desc in available.items()])
@@ -306,8 +331,20 @@ class DataAgent:
 - ts_top_product_sales genera gráfico de línea temporal
 """
 
-        user_msg = f"""Pregunta del usuario: "{question}"
+        # Construir mensaje con contexto de conversación si existe
+        context_section = ""
+        if chat_context:
+            context_section = f"""
+## CONTEXTO DE CONVERSACIÓN ANTERIOR:
+{chat_context}
+
+"""
+
+        user_msg = f"""{context_section}Pregunta ACTUAL del usuario: "{question}"
 Rango de fechas: {date_from or 'últimos 30 días'} a {date_to or 'hoy'}
+
+IMPORTANTE: Usa el contexto de conversación para entender mejor la pregunta.
+Si el usuario dice "mostrame eso" o "y del inventario?", debes inferir de qué habla basándote en el contexto.
 
 Selecciona las queries a ejecutar."""
 
@@ -445,16 +482,18 @@ Selecciona las queries a ejecutar."""
             return None
         return round(((current - previous) / previous) * 100, 2)
 
-    def run(self, question: str, date_from: Optional[str] = None, date_to: Optional[str] = None) -> DataPayload:
+    def run(self, question: str, date_from: Optional[str] = None, date_to: Optional[str] = None, chat_context: Optional[str] = None) -> DataPayload:
         """
         Entry point principal del DataAgent.
         1. Detecta si es comparación entre periodos
-        2. Decide que queries ejecutar
+        2. Decide que queries ejecutar (usando contexto de conversación)
         3. Ejecuta el plan (2 veces si es comparación)
         4. Retorna el payload con datos de comparación si aplica
         """
         import sys
         print(f"[DataAgent.run] Question: {question[:50]}, date_from={date_from}, date_to={date_to}", file=sys.stderr, flush=True)
+        if chat_context:
+            print(f"[DataAgent.run] Chat context: {chat_context[:100]}...", file=sys.stderr, flush=True)
 
         # Detectar si es una comparación
         comparison_info = extract_comparison_dates(question)
@@ -462,8 +501,8 @@ Selecciona las queries a ejecutar."""
         if comparison_info.is_comparison and comparison_info.previous_period:
             print(f"[DataAgent] COMPARACION detectada: {comparison_info.current_period.label} vs {comparison_info.previous_period.label}", file=sys.stderr, flush=True)
 
-            # Paso 1: Decidir queries
-            plan = self.decide_queries(question, date_from, date_to)
+            # Paso 1: Decidir queries (con contexto de conversación)
+            plan = self.decide_queries(question, date_from, date_to, chat_context)
             print(f"[DataAgent] Plan decidido: {plan.query_ids}", file=sys.stderr, flush=True)
 
             # Paso 2: Ejecutar para periodo ACTUAL
@@ -547,8 +586,8 @@ Selecciona las queries a ejecutar."""
         # Flujo normal (sin comparación)
         print(f"[DataAgent] Flujo normal (sin comparación)", file=sys.stderr, flush=True)
 
-        # Paso 1: Decidir queries
-        plan = self.decide_queries(question, date_from, date_to)
+        # Paso 1: Decidir queries (con contexto de conversación)
+        plan = self.decide_queries(question, date_from, date_to, chat_context)
         print(f"[DataAgent] Plan decidido: {plan.query_ids}", file=sys.stderr, flush=True)
 
         # Paso 2: Ejecutar

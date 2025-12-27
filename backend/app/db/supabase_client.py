@@ -11,6 +11,13 @@ from datetime import datetime, date, timedelta
 from decimal import Decimal
 import httpx
 from functools import lru_cache
+from dotenv import load_dotenv
+import pathlib
+
+# Asegurar que env vars estan cargadas desde el directorio backend
+_backend_dir = pathlib.Path(__file__).parent.parent.parent
+_env_path = _backend_dir / ".env"
+load_dotenv(_env_path)
 
 from ..sql.allowlist import get_query_template, validate_query_id, build_params
 from ..schemas.payload import DatasetMeta
@@ -49,6 +56,10 @@ class SupabaseRESTClient:
         self.base_url = os.getenv("SUPABASE_URL", "").rstrip("/")
         self.api_key = os.getenv("SUPABASE_ANON_KEY", "")
         self.service_key = os.getenv("SUPABASE_SERVICE_KEY", self.api_key)
+
+        # Debug: mostrar configuración al inicializar
+        print(f"[SupabaseRESTClient] base_url: {self.base_url[:50] if self.base_url else 'EMPTY!'}")
+        print(f"[SupabaseRESTClient] api_key present: {bool(self.api_key)}")
 
         # Headers por defecto - usar service_key para bypass RLS
         self.headers = {

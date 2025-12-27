@@ -24,8 +24,15 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-# Cargar .env
-load_dotenv()
+# Cargar .env desde el directorio backend
+import pathlib
+_backend_dir = pathlib.Path(__file__).parent.parent
+_env_path = _backend_dir / ".env"
+load_dotenv(_env_path)
+
+# Configurar logging estructurado
+from .utils.logger import configure_logging, ensure_configured
+configure_logging()
 
 from .schemas.intent import QueryRequest
 from .schemas.dashboard import DashboardSpec

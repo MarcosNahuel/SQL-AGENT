@@ -10,9 +10,12 @@ from datetime import datetime
 from pydantic import BaseModel
 import httpx
 from dotenv import load_dotenv
+import pathlib
 
-# Ensure env vars are loaded
-load_dotenv()
+# Ensure env vars are loaded from backend directory
+_backend_dir = pathlib.Path(__file__).parent.parent.parent
+_env_path = _backend_dir / ".env"
+load_dotenv(_env_path)
 
 
 class ChatMessage(BaseModel):
@@ -304,14 +307,34 @@ class AgentMemory:
 
 
 # Singleton instances per thread/user
+# Limited to MAX_CHAT_THREADS to prevent memory leaks
+MAX_CHAT_THREADS = 5
 _chat_memories: Dict[str, ChatMemory] = {}
+_chat_memory_order: list = []  # Track insertion order for FIFO cleanup
 _agent_memories: Dict[str, AgentMemory] = {}
 
 
 def get_chat_memory(thread_id: str, user_id: Optional[str] = None) -> ChatMemory:
-    """Get or create chat memory for a thread"""
+    """
+    Get or create chat memory for a thread.
+
+    Limits to MAX_CHAT_THREADS (5) threads using FIFO eviction.
+    """
+    global _chat_memories, _chat_memory_order
+
     if thread_id not in _chat_memories:
+        # Check if we need to evict oldest thread
+        while len(_chat_memories) >= MAX_CHAT_THREADS and _chat_memory_order:
+            oldest_thread = _chat_memory_order.pop(0)
+            if oldest_thread in _chat_memories:
+                del _chat_memories[oldest_thread]
+                print(f"[ChatMemory] Evicted oldest thread: {oldest_thread[:8]}...")
+
+        # Create new memory and track order
         _chat_memories[thread_id] = ChatMemory(thread_id, user_id)
+        _chat_memory_order.append(thread_id)
+        print(f"[ChatMemory] Created new thread: {thread_id[:8]}... (total: {len(_chat_memories)})")
+
     return _chat_memories[thread_id]
 
 
@@ -320,3 +343,13 @@ def get_agent_memory(user_id: str) -> AgentMemory:
     if user_id not in _agent_memories:
         _agent_memories[user_id] = AgentMemory(user_id)
     return _agent_memories[user_id]
+
+
+def clear_all_chat_memories() -> int:
+    """Clear all chat memories. Returns count of cleared threads."""
+    global _chat_memories, _chat_memory_order
+    count = len(_chat_memories)
+    _chat_memories.clear()
+    _chat_memory_order.clear()
+    print(f"[ChatMemory] Cleared all {count} threads")
+    return count

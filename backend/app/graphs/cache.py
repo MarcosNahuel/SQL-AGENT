@@ -5,10 +5,12 @@ Provides:
 - LRU cache with TTL
 - Per-node caching policies
 - Cache key generation based on state
+- Environment-based cache control
 
 Based on LangGraph caching docs:
 https://docs.langchain.com/oss/python/langgraph/graph-api
 """
+import os
 import hashlib
 import json
 import time
@@ -17,6 +19,13 @@ from functools import wraps
 from dataclasses import dataclass, field
 from collections import OrderedDict
 import threading
+
+from ..utils.logger import get_logger
+
+_logger = get_logger("Cache")
+
+# Environment-based cache control
+CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
 
 
 @dataclass
@@ -141,30 +150,31 @@ _presentation_cache = LRUCache(max_size=50, default_ttl=180)  # 3 min
 
 
 # Cache policies por nodo
+# IMPORTANTE: trace_id incluido para evitar respuestas cacheadas entre requests
 NODE_CACHE_POLICIES = {
     "Router": CachePolicy(
         enabled=True,
         ttl_seconds=600,
         max_size=200,
-        key_fields=["question"]
+        key_fields=["question", "trace_id"]  # trace_id para unicidad
     ),
     "DataAgent": CachePolicy(
         enabled=True,
         ttl_seconds=300,
         max_size=100,
-        key_fields=["question", "date_from", "date_to"]
+        key_fields=["question", "date_from", "date_to", "trace_id"]  # trace_id
     ),
     "PresentationAgent": CachePolicy(
         enabled=True,
         ttl_seconds=180,
         max_size=50,
-        key_fields=["question"]  # Presentation depends on question + data
+        key_fields=["question", "trace_id"]  # trace_id para unicidad
     ),
     "DirectResponse": CachePolicy(
         enabled=True,
         ttl_seconds=3600,  # 1 hour for static responses
         max_size=50,
-        key_fields=["question"]
+        key_fields=["question", "trace_id"]  # trace_id
     )
 }
 
@@ -196,20 +206,24 @@ def cached_node(node_name: str):
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(state: Dict[str, Any]) -> Dict[str, Any]:
-            if not policy.enabled:
+            trace_id = state.get("trace_id", "unknown")
+
+            # Check global cache enabled + policy enabled
+            if not CACHE_ENABLED or not policy.enabled:
+                _logger.debug(trace_id, f"Cache disabled for {node_name}")
                 return func(state)
 
-            # Generate cache key
+            # Generate cache key (now includes trace_id)
             cache_key = f"{node_name}:{policy.generate_key(state)}"
 
             # Try cache hit
             cached_result = cache.get(cache_key)
             if cached_result is not None:
-                print(f"[Cache] HIT for {node_name}")
+                _logger.info(trace_id, f"HIT for {node_name}", {"key": cache_key[:16]})
                 return cached_result
 
             # Execute and cache
-            print(f"[Cache] MISS for {node_name}")
+            _logger.info(trace_id, f"MISS for {node_name}", {"key": cache_key[:16]})
             result = func(state)
 
             # Only cache successful results
@@ -222,17 +236,24 @@ def cached_node(node_name: str):
     return decorator
 
 
-def invalidate_cache(node_name: Optional[str] = None) -> None:
+def invalidate_cache(node_name: Optional[str] = None, trace_id: str = "system") -> None:
     """Invalida el cache de un nodo o todos"""
     if node_name:
         cache = get_cache_for_node(node_name)
         cache.clear()
-        print(f"[Cache] Cleared cache for {node_name}")
+        _logger.info(trace_id, f"Cleared cache for {node_name}")
     else:
         _router_cache.clear()
         _data_cache.clear()
         _presentation_cache.clear()
-        print("[Cache] Cleared all caches")
+        _logger.info(trace_id, "Cleared all caches")
+
+
+def invalidate_all_caches() -> None:
+    """Limpia todos los caches - llamar al inicio de cada request si es necesario"""
+    _router_cache.clear()
+    _data_cache.clear()
+    _presentation_cache.clear()
 
 
 def get_cache_stats() -> Dict[str, Dict[str, Any]]:

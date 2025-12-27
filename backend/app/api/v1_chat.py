@@ -34,6 +34,13 @@ from ..schemas.intent import QueryRequest
 from ..graphs.insight_graph import run_insight_graph_streaming, run_insight_graph_v2_streaming
 from ..utils.date_parser import extract_date_range, format_date_context
 from ..memory.chat_memory import get_chat_memory
+from ..utils.logger import get_logger, ensure_configured
+from ..graphs.cache import invalidate_all_caches
+
+# Ensure logging is configured
+ensure_configured()
+
+_logger = get_logger("v1_chat")
 
 # V2 is now the default (consolidated into insight_graph.py)
 V2_AVAILABLE = True
@@ -78,9 +85,16 @@ async def generate_ai_sdk_stream(
     message_id = f"msg-{trace_id}"
     text_id = f"text-{trace_id}"
 
+    # Log request start
+    _logger.start(trace_id, "Chat request started", {
+        "question": question[:50] if question else "",
+        "conversation_id": conversation_id,
+        "user_id": user_id
+    })
+
     # Check if v2 is enabled
     use_v2 = os.getenv("USE_GRAPH_V2", "false").lower() == "true" and V2_AVAILABLE
-    print(f"[v1_chat] use_v2={use_v2}, V2_AVAILABLE={V2_AVAILABLE}, USE_GRAPH_V2={os.getenv('USE_GRAPH_V2')}", flush=True)
+    _logger.info(trace_id, f"Graph version: {'v2' if use_v2 else 'v1'}")
 
     # Initialize chat memory for persistence (user message saved at endpoint level)
     thread_id = conversation_id or f"thread-{trace_id}"
@@ -207,6 +221,12 @@ async def generate_ai_sdk_stream(
         "messageId": message_id
     })
 
+    # Log request end
+    _logger.end(trace_id, "Chat request completed", {
+        "dashboard_emitted": dashboard_emitted,
+        "data_payload_emitted": data_payload_emitted
+    })
+
     # 7. Done marker
     yield "data: [DONE]\n\n"
 
@@ -221,13 +241,18 @@ async def chat_stream(request: ChatRequest):
     """
     trace_id = str(uuid.uuid4())[:8]
 
+    _logger.start(trace_id, "New request received", {
+        "question": request.question[:50] if request.question else "",
+        "conversation_id": request.conversation_id
+    })
+
     # Save user message BEFORE streaming (synchronous, guaranteed to run)
     thread_id = request.conversation_id or f"thread-{trace_id}"
     try:
         chat_memory = get_chat_memory(thread_id, request.user_id)
         chat_memory.add_message_sync("user", request.question, {"trace_id": trace_id})
     except Exception as e:
-        print(f"[chat_stream] Error saving user message: {e}", flush=True)
+        _logger.error(trace_id, f"Error saving user message: {e}", exc_info=False)
 
     return StreamingResponse(
         generate_ai_sdk_stream(

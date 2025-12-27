@@ -187,9 +187,10 @@ class DataAgent:
         elif "escalad" in q_lower:
             query_ids = ["escalated_cases", "ai_interactions_summary"]
 
-        # Análisis por MES específico (enero, febrero, etc.) - requiere datos mensuales + productos
+        # Análisis por MES específico (enero, febrero, etc.) - usar datos DIARIOS para ver desglose
+        # El filtro de fechas ya limita al mes, ts_sales_by_day mostrará los días de ese mes
         elif any(kw in q_lower for kw in ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]):
-            query_ids = ["kpi_sales_summary", "sales_by_month", "top_products_by_revenue"]
+            query_ids = ["kpi_sales_summary", "ts_sales_by_day", "top_products_by_revenue"]
 
         # Ciclo de ventas / Estacionalidad / Tendencia mensual
         elif any(kw in q_lower for kw in ["ciclo", "estacionalidad", "temporada", "patron", "patrón"]):

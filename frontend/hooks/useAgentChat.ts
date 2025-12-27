@@ -35,6 +35,8 @@ export type ConnectionStatus = "idle" | "connecting" | "streaming" | "error" | "
 
 interface UseAgentChatOptions {
   apiUrl?: string;
+  userId?: string | null;
+  conversationId?: string | null;
   onDashboardUpdate?: (dashboard: DashboardState) => void;
   onAgentStep?: (step: AgentStep) => void;
   onError?: (error: Error) => void;
@@ -67,6 +69,8 @@ interface UseAgentChatReturn {
 export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatReturn {
   const {
     apiUrl = "http://localhost:8000/v1/chat/stream",  // Direct backend
+    userId,
+    conversationId,
     onDashboardUpdate,
     onAgentStep,
     onError,
@@ -194,12 +198,16 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRet
     signal: AbortSignal,
     attempt: number = 0
   ): Promise<void> => {
-    console.log("[SSE] Sending to:", apiUrl, "question:", question);
+    console.log("[SSE] Sending to:", apiUrl, "question:", question, "userId:", userId, "conversationId:", conversationId);
     try {
       const response = await fetch(apiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({
+          question,
+          user_id: userId || null,
+          conversation_id: conversationId || null,
+        }),
         signal,
       });
 
@@ -258,7 +266,7 @@ export function useAgentChat(options: UseAgentChatOptions = {}): UseAgentChatRet
 
       throw error;
     }
-  }, [apiUrl, processSSEEvent, retryAttempts, retryDelay]);
+  }, [apiUrl, userId, conversationId, processSSEEvent, retryAttempts, retryDelay]);
 
   // Send message
   const sendMessage = useCallback(async (question: string) => {

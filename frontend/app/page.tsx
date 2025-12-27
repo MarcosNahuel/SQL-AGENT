@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAgentChat, ChatMessage } from "@/hooks";
+import { useAuth } from "@/contexts/AuthContext";
 import { DashboardRenderer } from "@/components/DashboardRenderer";
 import { DataPayload } from "@/lib/types";
 import { AgentTimeline } from "@/components/AgentTimeline";
@@ -21,6 +22,7 @@ import {
   Activity,
   X,
   RotateCcw,
+  LogOut,
 } from "lucide-react";
 
 interface ConversationThread {
@@ -44,6 +46,9 @@ export default function Home() {
   const [conversations, setConversations] = useState<ConversationThread[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Auth context for user session
+  const { user, conversationId, signOut, resetConversation, isLoading: authLoading } = useAuth();
+
   // Use our custom hook for all chat functionality
   const {
     messages,
@@ -63,10 +68,23 @@ export default function Home() {
   } = useAgentChat({
     // Direct backend call - CORS is configured
     apiUrl: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/v1/chat/stream",
+    userId: user?.id,
+    conversationId: conversationId,
     onError: (err) => {
       console.error("[Chat Error]", err);
     },
   });
+
+  // Handle new conversation (reset chat + generate new conversation ID)
+  const handleNewConversation = useCallback(() => {
+    resetChat();
+    resetConversation();
+  }, [resetChat, resetConversation]);
+
+  // Handle logout
+  const handleLogout = async () => {
+    await signOut();
+  };
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -105,6 +123,15 @@ export default function Home() {
     setCurrentDashboardIndex(conv.dashboardIndex);
   };
 
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-gray-950">
+        <Loader2 className="w-8 h-8 text-blue-400 animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="h-screen flex bg-gray-950 overflow-hidden">
       {/* Left Panel - Chat with Conversations (SCROLLABLE) */}
@@ -121,29 +148,45 @@ export default function Home() {
                   SQL Agent
                   <ConnectionDot status={connectionStatus} />
                 </h1>
-                <p className="text-xs text-gray-500">
-                  Dashboard Inteligente con IA
+                <p className="text-xs text-gray-500 truncate max-w-[150px]" title={user?.email || ""}>
+                  {user?.email || "Dashboard Inteligente con IA"}
                 </p>
               </div>
             </div>
-            {messages.length > 0 && (
+            <div className="flex items-center gap-2">
+              {messages.length > 0 && (
+                <button
+                  onClick={handleNewConversation}
+                  className="p-2 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+                  title="Nueva conversacion"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+              )}
               <button
-                onClick={resetChat}
-                className="p-2 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
-                title="Nueva conversacion"
+                onClick={handleLogout}
+                className="p-2 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-red-400 transition-colors"
+                title="Cerrar sesion"
               >
-                <RotateCcw className="w-4 h-4" />
+                <LogOut className="w-4 h-4" />
               </button>
-            )}
+            </div>
           </div>
           {/* Connection status bar */}
           <div className="mt-3 flex items-center justify-between">
             <ConnectionStatusIndicator status={connectionStatus} />
-            {currentTraceId && (
-              <span className="text-xs text-gray-600 font-mono">
-                {currentTraceId.slice(0, 8)}...
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {conversationId && (
+                <span className="text-xs text-blue-500/70 font-mono" title={conversationId}>
+                  {conversationId.slice(0, 12)}
+                </span>
+              )}
+              {currentTraceId && (
+                <span className="text-xs text-gray-600 font-mono">
+                  {currentTraceId.slice(0, 8)}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
